@@ -1,0 +1,33 @@
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Simple AI rules-based system
+app.post('/api/adapt-difficulty', (req, res) => {
+  const { score, accuracy, previousDifficulty } = req.body;
+  
+  let newDifficulty = previousDifficulty || 1;
+  
+  if (score > 80 && accuracy > 0.8) {
+    newDifficulty = Math.min(previousDifficulty + 1, 10);
+  } else if (score < 50 || accuracy < 0.5) {
+    newDifficulty = Math.max(previousDifficulty - 1, 1);
+  }
+  
+  res.json({
+    difficulty: newDifficulty,
+    recommendation: newDifficulty > previousDifficulty ? 'Challenge increased!' : 'Keep practicing!'
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'AI Service Running' });
+});
+
+const PORT = 5001;
+app.listen(PORT, () => {
+  console.log(`🤖 AI Service running on http://localhost:${PORT}`);
+});
