@@ -5,7 +5,7 @@ import {
   Mic, MicOff, X, Volume2, VolumeX, 
   MessageCircle, Send, Bot, Sparkles,
   ChevronUp, ChevronDown, History, Trash2,
-  Play, Pause
+  Play, Pause, Keyboard
 } from 'lucide-react';
 import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
 import AIResponseService from '../../services/aiResponseService';
@@ -33,9 +33,15 @@ const VoiceAssistant = () => {
   const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [speechQueue, setSpeechQueue] = useState([]);
+  const [inputMode, setInputMode] = useState('voice'); // 'voice' or 'text'
+  const [textInput, setTextInput] = useState('');
   const messagesEndRef = useRef(null);
   const synthRef = useRef(null);
   const utteranceRef = useRef(null);
+  const textInputRef = useRef(null);
+  // Silence timer for auto-stop
+  const silenceTimerRef = useRef(null);
+  const lastSpeechTimeRef = useRef(Date.now());
 
   const {
     transcript: speechTranscript,
@@ -54,12 +60,24 @@ const VoiceAssistant = () => {
     };
   }, []);
 
-  // Update transcript when speech recognition updates
+  // Update transcript when speech recognition updates + silence detection
   useEffect(() => {
-    if (speechTranscript) {
+    if (speechTranscript && speechTranscript.trim()) {
       setTranscript(speechTranscript);
+      lastSpeechTimeRef.current = Date.now();
+
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+      // Auto-stop after 3 seconds of silence
+      if (isListening) {
+        silenceTimerRef.current = setTimeout(() => {
+          if (isListening) {
+            stopListeningAndProcess();
+          }
+        }, 3000);
+      }
     }
-  }, [speechTranscript]);
+  }, [speechTranscript, isListening]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -73,114 +91,140 @@ const VoiceAssistant = () => {
     setLanguage(i18n.language || 'en');
   }, [i18n.language]);
 
-  // Speak text using Web Speech API with Pause/Resume support
+  // Focus text input when switching to text mode
+  useEffect(() => {
+    if (inputMode === 'text' && textInputRef.current) {
+      textInputRef.current.focus();
+    }
+  }, [inputMode]);
+
+  // ============================================================
+  // SPEAK — FIXED: Cancel old speech, no queue leak
+  // ============================================================
   const speak = useCallback((text, lang = 'en') => {
     if (!synthRef.current || !text) return;
-    
-    // If already speaking and not paused, queue the text
-    if (synthRef.current.speaking && !isPaused) {
-      setSpeechQueue(prev => [...prev, { text, lang }]);
-      return;
-    }
-    
-    // If paused, queue it
-    if (isPaused) {
-      setSpeechQueue(prev => [...prev, { text, lang }]);
-      return;
-    }
-    
-    // Cancel any ongoing speech
+
+    // ⭐ ALWAYS cancel any pending/old speech first
     synthRef.current.cancel();
-    
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang;
-    utterance.rate = 0.9;
-    utterance.pitch = 1;
-    utterance.volume = 1;
-    utteranceRef.current = utterance;
-    
-    const voices = synthRef.current.getVoices();
-    const voice = voices.find(v => v.lang.startsWith(lang.split('-')[0]));
-    if (voice) {
-      utterance.voice = voice;
-    }
-    
-    setIsBotSpeaking(true);
-    
-    utterance.onend = () => {
-      setIsBotSpeaking(false);
-      setIsPaused(false);
-      utteranceRef.current = null;
-      // Check queue for next item
-      if (speechQueue.length > 0) {
-        const next = speechQueue[0];
-        setSpeechQueue(prev => prev.slice(1));
-        speak(next.text, next.lang);
+    setIsPaused(false);
+    setSpeechQueue([]);
+
+    // Small delay to ensure cancel completes
+    setTimeout(() => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = lang;
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utteranceRef.current = utterance;
+
+      const voices = synthRef.current.getVoices();
+      const voice = voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+      if (voice) {
+        utterance.voice = voice;
       }
-    };
-    
-    utterance.onerror = (e) => {
-      console.log('Speech error:', e);
-      setIsBotSpeaking(false);
-      setIsPaused(false);
-      utteranceRef.current = null;
-    };
-    
-    synthRef.current.speak(utterance);
-  }, [isPaused, speechQueue]);
+
+      setIsBotSpeaking(true);
+
+      utterance.onend = () => {
+        setIsBotSpeaking(false);
+        setIsPaused(false);
+        utteranceRef.current = null;
+      };
+
+      utterance.onerror = (e) => {
+        console.log('Speech error:', e);
+        setIsBotSpeaking(false);
+        setIsPaused(false);
+        utteranceRef.current = null;
+      };
+
+      synthRef.current.speak(utterance);
+    }, 100);
+  }, []);
 
   // Toggle Pause/Resume
   const togglePause = useCallback(() => {
     if (!synthRef.current) return;
-    
+
     if (isPaused) {
-      // Resume
       synthRef.current.resume();
       setIsPaused(false);
-      // If there are queued items, start speaking them
-      if (speechQueue.length > 0 && !synthRef.current.speaking) {
-        const next = speechQueue[0];
-        setSpeechQueue(prev => prev.slice(1));
-        speak(next.text, next.lang);
-      }
     } else {
-      // Pause
       if (synthRef.current.speaking) {
         synthRef.current.pause();
         setIsPaused(true);
       }
     }
-  }, [isPaused, speechQueue, speak]);
+  }, [isPaused]);
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
     if (synthRef.current) {
       synthRef.current.cancel();
-      setIsBotSpeaking(false);
-      setIsPaused(false);
-      utteranceRef.current = null;
-      setSpeechQueue([]);
+      setTimeout(() => {
+        if (synthRef.current && synthRef.current.speaking) {
+          synthRef.current.pause();
+          synthRef.current.cancel();
+        }
+      }, 50);
     }
+    setIsBotSpeaking(false);
+    setIsPaused(false);
+    utteranceRef.current = null;
+    setSpeechQueue([]);
   }, []);
 
-  // Process voice command
+  // ============================================================
+  // STOP LISTENING with cleanup
+  // ============================================================
+  const stopListening = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    SpeechRecognition.stopListening();
+    setIsListening(false);
+  }, []);
+
+  // Stop listening AND process what was captured
+  const stopListeningAndProcess = useCallback(() => {
+    stopListening();
+    const captured = transcript.trim();
+    if (captured) {
+      setTranscript('');
+      resetTranscript();
+      // Defer processCommand to next tick so state settles
+      setTimeout(() => {
+        processCommand(captured);
+      }, 50);
+    }
+  }, [transcript, stopListening, resetTranscript]);
+
+  // ============================================================
+  // PROCESS COMMAND — uses new aiAgent.ask() API
+  // ============================================================
   const processCommand = useCallback(async (command) => {
     if (!command || command.trim().length < 2) {
-      setResponse('I didn\'t hear anything. Please try again.');
+      setResponse("I didn't hear anything. Please try again.");
       return;
     }
 
-    // Stop any ongoing speech
+    // Stop listening immediately
+    stopListening();
+
+    // Stop any ongoing speech BEFORE processing new command
     stopSpeaking();
 
     setIsProcessing(true);
     const cmd = command.toLowerCase().trim();
     const currentLang = language;
 
-    // Add user message to chat
+    // Add user message
     setChatHistory(prev => [...prev, { type: 'user', text: command, timestamp: new Date() }]);
+    setResponse('');
 
-    // Navigation Commands - EXACT matches only
+    // ===== NAVIGATION COMMANDS =====
     const navCommands = {
       'games': ['games', 'game', 'play games', 'open games', 'go to games', 'खेल', 'गेम', 'খেল'],
       'dashboard': ['dashboard', 'home', 'main page', 'go home', 'डैशबोर्ड', 'হোম'],
@@ -192,25 +236,26 @@ const VoiceAssistant = () => {
       'settings': ['settings', 'preferences', 'options', 'सेटिंग्स']
     };
 
-    // Game Commands - EXACT matches only
+    // ===== GAME COMMANDS =====
     const gameCommands = {
       'memory': ['memory lane', 'memories', 'मेमोरी लेन'],
       'routine': ['routine builder', 'daily routine', 'रूटीन बिल्डर'],
       'pattern': ['pattern quest', 'patterns', 'पैटर्न क्वेस्ट'],
       'story': ['story weaver', 'stories', 'स्टोरी वीवर'],
       'face': ['face and place', 'place match', 'फेस एंड प्लेस'],
+      'card': ['card flip', 'card game', 'कार्ड फ्लिप'],
       'mindful': ['mindful moments', 'meditation', 'माइंडफुल'],
       'gesture': ['gesture drawing', 'hand drawing', 'जेस्चर ड्रॉइंग']
     };
 
-    // Navigation - check if command matches any navigation intent
+    // NAVIGATION
     for (const [key, triggers] of Object.entries(navCommands)) {
       if (triggers.some(t => cmd.includes(t))) {
         const responseText = AIResponseService.getResponse(`navigation.${key}`, currentLang);
         setResponse(responseText);
         setChatHistory(prev => [...prev, { type: 'bot', text: responseText, timestamp: new Date() }]);
         speak(responseText, currentLang);
-        
+
         setTimeout(() => {
           const path = key === 'home' ? '' : key;
           navigate(`/${path}`);
@@ -220,22 +265,18 @@ const VoiceAssistant = () => {
       }
     }
 
-    // Games - check if command matches any game
+    // GAMES
     for (const [key, triggers] of Object.entries(gameCommands)) {
       if (triggers.some(t => cmd.includes(t))) {
         const responseText = AIResponseService.getResponse(`games.${key}`, currentLang);
         setResponse(responseText);
         setChatHistory(prev => [...prev, { type: 'bot', text: responseText, timestamp: new Date() }]);
         speak(responseText, currentLang);
-        
+
         const gamePaths = {
-          memory: '/game/1',
-          routine: '/game/2',
-          pattern: '/game/3',
-          story: '/game/4',
-          face: '/game/5',
-          mindful: '/game/6',
-          gesture: '/game/gesture-drawing'
+          memory: '/game/1', routine: '/game/2', pattern: '/game/3',
+          story: '/game/4', face: '/game/5', card: '/game/6',
+          mindful: '/game/7', gesture: '/game/gesture-drawing'
         };
         setTimeout(() => {
           navigate(gamePaths[key] || '/games');
@@ -245,7 +286,7 @@ const VoiceAssistant = () => {
       }
     }
 
-    // Help command
+    // HELP
     if (cmd.includes('help') || cmd.includes('मदद') || cmd.includes('সহায়')) {
       const responseText = AIResponseService.getResponse('actions.help', currentLang);
       setResponse(responseText);
@@ -255,7 +296,7 @@ const VoiceAssistant = () => {
       return;
     }
 
-    // Reminder commands
+    // REMINDERS - ADD
     if (cmd.includes('add reminder') || cmd.includes('new reminder') || cmd.includes('अनुस्मारक जोड़ें')) {
       const responseText = AIResponseService.getResponse('reminders.add', currentLang);
       setResponse(responseText);
@@ -268,6 +309,7 @@ const VoiceAssistant = () => {
       return;
     }
 
+    // REMINDERS - CHECK
     if (cmd.includes('check reminder') || cmd.includes('show reminder') || cmd.includes('अनुस्मारक देखें')) {
       const responseText = AIResponseService.getResponse('reminders.check', currentLang);
       setResponse(responseText);
@@ -281,72 +323,81 @@ const VoiceAssistant = () => {
     }
 
     // ============================================================
-    // SMART AI AGENT - Uses context-aware knowledge base
+    // AI AGENT — New .ask() API (race-safe, language-aware)
     // ============================================================
     try {
-      // First try local knowledge base with smart categorization
-      const quickAnswer = aiAgent.quickAnswer(command);
-      if (quickAnswer) {
-        const responseText = quickAnswer.answer;
-        setResponse(responseText);
-        setChatHistory(prev => [...prev, { type: 'bot', text: responseText, timestamp: new Date() }]);
-        speak(responseText, currentLang);
+      setResponse('🔍 Let me think...');
+
+      // ⭐ NEW: single-call API — auto-detects language, handles races
+      const result = await aiAgent.ask(command, currentLang);
+
+      // ⭐ Skip if user asked a newer question while this one was processing
+      if (result.stale) {
+        console.log('⏭️ Discarding stale response');
         setIsProcessing(false);
         return;
       }
-      
-      // If not found locally, search Wikipedia with smart context
-      setResponse('🔍 Let me search for that...');
-      const aiResponse = await aiAgent.answerQuestion(command, currentLang);
+
+      const aiResponse = result.text;
+      const responseLang = result.lang || currentLang;
+
       setResponse(aiResponse);
       setChatHistory(prev => [...prev, { type: 'bot', text: aiResponse, timestamp: new Date() }]);
-      speak(aiResponse, currentLang);
+
+      // Speak in the language Gemini actually responded in
+      setTimeout(() => speak(aiResponse, responseLang), 100);
+
     } catch (error) {
       console.error('AI Agent error:', error);
-      const fallback = "I'm having trouble finding that information right now. Please try asking something else or check your internet connection.";
+      const fallback = "I'm having trouble finding that information right now. Please try asking something else.";
       setResponse(fallback);
       setChatHistory(prev => [...prev, { type: 'bot', text: fallback, timestamp: new Date() }]);
       speak(fallback, currentLang);
     }
     setIsProcessing(false);
-  }, [navigate, language, speak, stopSpeaking]);
+  }, [navigate, language, speak, stopListening, stopSpeaking]);
 
-  // Handle listening toggle
+  // ============================================================
+  // HANDLE LISTENING TOGGLE
+  // ============================================================
   const toggleListening = () => {
     if (isListening) {
-      SpeechRecognition.stopListening();
-      setIsListening(false);
-      if (transcript.trim()) {
-        processCommand(transcript);
-      }
+      stopListeningAndProcess();
     } else {
       resetTranscript();
       setTranscript('');
       setResponse('');
       setIsListening(true);
-      
+      lastSpeechTimeRef.current = Date.now();
+
       const langMap = {
-        'en': 'en-US',
-        'hi': 'hi-IN',
-        'as': 'as-IN',
-        'bn': 'bn-IN',
-        'mr': 'mr-IN',
-        'gu': 'gu-IN',
-        'pa': 'pa-IN',
-        'or': 'or-IN',
-        'te': 'te-IN',
-        'ta': 'ta-IN',
-        'kn': 'kn-IN'
+        'en': 'en-US', 'hi': 'hi-IN', 'as': 'as-IN', 'bn': 'bn-IN',
+        'mr': 'mr-IN', 'gu': 'gu-IN', 'pa': 'pa-IN', 'or': 'or-IN',
+        'te': 'te-IN', 'ta': 'ta-IN', 'kn': 'kn-IN'
       };
-      
+
+      // Continuous: true — we handle auto-stop via our 3s silence timer
       SpeechRecognition.startListening({ 
         continuous: true,
+        interimResults: true,
         language: langMap[language] || 'en-US'
       });
     }
   };
 
-  // Clear chat history
+  // ============================================================
+  // TEXT INPUT SUBMIT
+  // ============================================================
+  const handleTextSubmit = (e) => {
+    e.preventDefault();
+    if (textInput.trim()) {
+      const command = textInput.trim();
+      setTextInput('');
+      processCommand(command);
+    }
+  };
+
+  // Clear chat
   const clearChat = () => {
     setChatHistory([]);
     stopSpeaking();
@@ -357,7 +408,23 @@ const VoiceAssistant = () => {
     setIsMinimized(!isMinimized);
   };
 
-  // If browser doesn't support speech recognition
+  // Switch input mode
+  const switchMode = (mode) => {
+    setInputMode(mode);
+    if (mode === 'text' && isListening) {
+      stopListening();
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (synthRef.current) synthRef.current.cancel();
+    };
+  }, []);
+
+  // Browser support check
   if (!browserSupportsSpeechRecognition) {
     return (
       <div className="fixed bottom-6 right-6 z-50">
@@ -382,7 +449,7 @@ const VoiceAssistant = () => {
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="fixed bottom-6 right-6 z-50 p-4 rounded-full bg-gradient-to-r from-primary-500 to-indigo-500 hover:shadow-xl text-white shadow-lg transition-all duration-200 hover:scale-110 group"
-        aria-label="Voice Assistant"
+        aria-label="AI Assistant"
       >
         {isBotSpeaking ? (
           <div className="relative">
@@ -402,10 +469,10 @@ const VoiceAssistant = () => {
         )}
       </button>
 
-      {/* Voice Assistant Modal */}
+      {/* Assistant Modal */}
       {isOpen && (
         <div className={`fixed bottom-24 right-6 z-50 w-96 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 transition-all duration-300 ${
-          isMinimized ? 'h-16' : 'h-[500px] max-h-[80vh]'
+          isMinimized ? 'h-16' : 'h-[560px] max-h-[85vh]'
         }`}>
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
@@ -414,23 +481,26 @@ const VoiceAssistant = () => {
                 <Bot className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                   AI Assistant
-                  {isBotSpeaking && (
-                    <span className="ml-2 text-xs text-primary-500 animate-pulse">🔊 Speaking...</span>
+                  {isBotSpeaking && !isPaused && (
+                    <span className="text-xs text-primary-500 animate-pulse">🔊</span>
                   )}
                   {isListening && (
-                    <span className="ml-2 text-xs text-green-500 animate-pulse">🎤 Listening...</span>
+                    <span className="text-xs text-green-500 animate-pulse">🎤</span>
                   )}
                   {isProcessing && (
-                    <span className="ml-2 text-xs text-yellow-500 animate-pulse">⏳ Thinking...</span>
+                    <span className="text-xs text-yellow-500 animate-pulse">⏳</span>
                   )}
                   {isPaused && (
-                    <span className="ml-2 text-xs text-amber-500 animate-pulse">⏸️ Paused</span>
+                    <span className="text-xs text-amber-500 animate-pulse">⏸️</span>
                   )}
                 </h3>
                 <p className="text-xs text-gray-500">
-                  {isListening ? 'Listening... Speak now!' : 'Click mic to speak'}
+                  {inputMode === 'voice' 
+                    ? (isListening ? 'Listening... (auto-stops on 3s silence)' : 'Click mic to speak')
+                    : 'Type your question below'
+                  }
                 </p>
               </div>
             </div>
@@ -452,25 +522,70 @@ const VoiceAssistant = () => {
 
           {!isMinimized && (
             <>
-              {/* Language Indicator */}
-              <div className="px-4 py-1 bg-gray-50 dark:bg-gray-700/50 text-center">
+              {/* Language + Mode Indicator */}
+              <div className="px-4 py-2 bg-gray-50 dark:bg-gray-700/50 flex items-center justify-between">
                 <span className="text-xs text-gray-500">
-                  🌐 Language: {
+                  🌐 {
                     { en: 'English', hi: 'हिन्दी', as: 'অসমীয়া', bn: 'বাংলা', mr: 'मराठी', gu: 'ગુજરાતી', pa: 'ਪੰਜਾਬੀ', or: 'ଓଡ଼ିଆ', te: 'తెలుగు', ta: 'தமிழ்', kn: 'ಕನ್ನಡ' }[language] || 'English'
                   }
                 </span>
+
+                <div className="flex items-center gap-1 bg-white dark:bg-gray-800 rounded-full p-0.5 border border-gray-200 dark:border-gray-700">
+                  <button
+                    onClick={() => switchMode('voice')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all flex items-center gap-1 ${
+                      inputMode === 'voice' 
+                        ? 'bg-primary-500 text-white shadow-sm' 
+                        : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    <Mic className="w-3 h-3" /> Voice
+                  </button>
+                  <button
+                    onClick={() => switchMode('text')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all flex items-center gap-1 ${
+                      inputMode === 'text' 
+                        ? 'bg-primary-500 text-white shadow-sm' 
+                        : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    <Keyboard className="w-3 h-3" /> Type
+                  </button>
+                </div>
               </div>
 
-              {/* Transcript Display */}
-              <div className="p-4 bg-gray-50 dark:bg-gray-700/30 min-h-[50px] border-b border-gray-200 dark:border-gray-700">
-                <p className="text-gray-700 dark:text-gray-300 text-sm italic">
-                  {transcript || (isListening ? '👂 Listening...' : '🎤 Click the mic and speak')}
-                </p>
-              </div>
+              {/* Transcript / Text Input */}
+              {inputMode === 'voice' ? (
+                <div className="p-4 bg-gray-50 dark:bg-gray-700/30 min-h-[60px] border-b border-gray-200 dark:border-gray-700">
+                  <p className="text-gray-700 dark:text-gray-300 text-sm italic">
+                    {transcript || (isListening ? '👂 Listening...' : '🎤 Click the mic and speak')}
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+                  <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
+                    <input
+                      ref={textInputRef}
+                      type="text"
+                      value={textInput}
+                      onChange={(e) => setTextInput(e.target.value)}
+                      placeholder="Type your question here..."
+                      className="flex-1 px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!textInput.trim() || isProcessing}
+                      className="p-2.5 rounded-xl bg-primary-500 hover:bg-primary-600 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
+                  </form>
+                </div>
+              )}
 
               {/* Response Display */}
               {response && (
-                <div className="p-4 bg-primary-50 dark:bg-primary-900/20 border-b border-gray-200 dark:border-gray-700">
+                <div className="p-4 bg-primary-50 dark:bg-primary-900/20 border-b border-gray-200 dark:border-gray-700 max-h-[80px] overflow-y-auto">
                   <div className="flex items-start space-x-2">
                     <Bot className="w-4 h-4 text-primary-500 mt-0.5 flex-shrink-0" />
                     <p className="text-sm text-gray-700 dark:text-gray-300">{response}</p>
@@ -480,22 +595,18 @@ const VoiceAssistant = () => {
 
               {/* Chat History */}
               {showChat && chatHistory.length > 0 && (
-                <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[200px]">
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[180px]">
                   {chatHistory.map((msg, index) => (
                     <div
                       key={index}
-                      className={`flex items-start space-x-2 ${
-                        msg.type === 'user' ? 'justify-end' : 'justify-start'
-                      }`}
+                      className={`flex items-start space-x-2 ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
                       {msg.type === 'bot' && <Bot className="w-4 h-4 text-primary-500 mt-1 flex-shrink-0" />}
-                      <div
-                        className={`p-3 rounded-xl max-w-[85%] ${
-                          msg.type === 'user'
-                            ? 'bg-primary-500 text-white rounded-br-none'
-                            : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-bl-none'
-                        }`}
-                      >
+                      <div className={`p-3 rounded-xl max-w-[85%] ${
+                        msg.type === 'user'
+                          ? 'bg-primary-500 text-white rounded-br-none'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-bl-none'
+                      }`}>
                         <p className="text-sm">{msg.text}</p>
                         <p className="text-[10px] opacity-60 mt-1">
                           {new Date(msg.timestamp).toLocaleTimeString()}
@@ -508,14 +619,14 @@ const VoiceAssistant = () => {
                 </div>
               )}
 
-              {/* Quick Action Buttons */}
+              {/* Quick Actions */}
               <div className="p-3 border-t border-gray-200 dark:border-gray-700">
                 <div className="flex flex-wrap gap-2">
                   {['Open Games', 'Dashboard', 'Check Reminders', 'Help'].map((action) => (
                     <button
                       key={action}
                       onClick={() => {
-                        setTranscript(action);
+                        if (inputMode === 'voice') setTranscript(action);
                         processCommand(action);
                       }}
                       className="px-3 py-1.5 text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-full transition-colors text-gray-700 dark:text-gray-300"
@@ -529,30 +640,20 @@ const VoiceAssistant = () => {
               {/* Controls */}
               <div className="flex items-center justify-between p-3 border-t border-gray-200 dark:border-gray-700">
                 <div className="flex items-center space-x-2">
-                  <button
-                    onClick={toggleListening}
-                    className={`p-3 rounded-full transition-all ${
-                      isListening 
-                        ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse' 
-                        : 'bg-primary-500 hover:bg-primary-600 text-white hover:shadow-lg'
-                    }`}
-                    disabled={isProcessing}
-                  >
-                    {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (transcript.trim()) {
-                        processCommand(transcript);
-                      }
-                    }}
-                    className="p-3 rounded-full bg-green-500 hover:bg-green-600 text-white transition-colors"
-                    disabled={!transcript.trim() || isProcessing}
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
-                  
-                  {/* Pause/Resume Button */}
+                  {inputMode === 'voice' && (
+                    <button
+                      onClick={toggleListening}
+                      className={`p-3 rounded-full transition-all ${
+                        isListening 
+                          ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse' 
+                          : 'bg-primary-500 hover:bg-primary-600 text-white hover:shadow-lg'
+                      }`}
+                      disabled={isProcessing}
+                    >
+                      {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                    </button>
+                  )}
+
                   {isBotSpeaking && (
                     <button
                       onClick={togglePause}
@@ -563,7 +664,7 @@ const VoiceAssistant = () => {
                     </button>
                   )}
                 </div>
-                
+
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => setShowChat(!showChat)}
@@ -586,10 +687,11 @@ const VoiceAssistant = () => {
 
               {/* Status Bar */}
               <div className="px-4 py-1 bg-gray-50 dark:bg-gray-700/50 text-center text-[10px] text-gray-400 border-t border-gray-200 dark:border-gray-700">
-                {isListening ? '🎤 Listening... Say something' : 
+                {isListening ? '🎤 Listening... (auto-stops after 3s of silence)' : 
                  isProcessing ? '⏳ Processing...' :
-                 isBotSpeaking ? isPaused ? '⏸️ Paused' : '🔊 Speaking...' :
-                 '💡 Say "Help" for commands or ask me anything!'}
+                 isBotSpeaking ? (isPaused ? '⏸️ Paused' : '🔊 Speaking...') :
+                 inputMode === 'voice' ? '💡 Say "Help" or tap the mic' :
+                 '⌨️ Type your question and press Enter'}
               </div>
             </>
           )}
