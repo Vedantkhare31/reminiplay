@@ -163,14 +163,15 @@ function usePlayerEngine() {
     try {
       const gameId = window.location.pathname.split('/game/')[1] || 'unknown';
       const gameNames = {
-        '1': 'Memory Lane',
-        '2': 'Routine Builder',
-        '3': 'Pattern Quest',
-        '4': 'Story Weaver',
-        '5': 'Face & Place',
-        '6': 'Mindful Moments',
-        'gesture-drawing': 'Gesture Drawing'
-      };
+  '1': 'Memory Lane',
+  '2': 'Routine Builder',
+  '3': 'Pattern Quest',
+  '4': 'Story Weaver',
+  '5': 'Face & Place',
+  '6': 'Card Flip',         
+  '7': 'Mindful Moments',   
+  'gesture-drawing': 'Gesture Drawing'
+};
       GameHistoryService.saveSession({
         gameId: gameId,
         gameName: gameNames[gameId] || 'Unknown Game',

@@ -14,7 +14,7 @@ const Games = () => {
     { id: 4, name: t('games.storyWeaver'), description: t('games.storyWeaverDesc'), icon: BookOpen, difficulty: t('games.difficulty.hard'), color: 'from-orange-500 to-red-500', plays: 432, rating: 4.9, path: '/game/4', category: 'narrative' },
     { id: 5, name: t('games.facePlace'), description: t('games.facePlaceDesc'), icon: Users, difficulty: t('games.difficulty.easy'), color: 'from-indigo-500 to-violet-500', plays: 987, rating: 4.5, path: '/game/5', category: 'recognition' },
     {id: 6, name: 'Card Flip', description: 'Flip cards to find matching pairs before time runs out', icon: Layers, difficulty: t('games.difficulty.medium'), color: 'from-violet-500 to-purple-500',  plays: 542, rating: 4.8, path: '/game/6', category: 'memory'},
-    { id: 7, name: t('games.mindfulMoments'), description: t('games.mindfulMomentsDesc'), icon: Heart, difficulty: t('games.difficulty.medium'), color: 'from-rose-500 to-pink-500', plays: 321, rating: 4.9, path: '/game/6', category: 'focus' },
+    { id: 7, name: t('games.mindfulMoments'), description: t('games.mindfulMomentsDesc'), icon: Heart, difficulty: t('games.difficulty.medium'), color: 'from-rose-500 to-pink-500', plays: 321, rating: 4.9, path: '/game/7', category: 'focus' },
    { id:'gesture-drawing' , name: t('games.gestureDrawing'), description: t('games.gestureDrawingDesc'), icon: Hand, difficulty: t('games.difficulty.medium'), color: 'from-indigo-500 to-purple-500', plays: 234, rating: 4.9, path: '/game/gesture-drawing', category: 'gesture' },
   ];
 
