@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id                String      @id @default(cuid())
+  email             String      @unique
+  phone             String?
+  name              String
+  passwordHash      String?
+  role              String      @default("patient")
+  isEmailVerified   Boolean     @default(false)
+  googleId          String?     @unique
+  avatar            String?
+  coins             Int         @default(100)
+  score             Int         @default(0)
+  level             Int         @default(1)
+  gameStats         String?     @default("{}")
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  otps              OTPCode[]
+  scores            GameScore[]
+
+  @@index([email])
+}
+
+model OTPCode {
+  id           String    @id @default(cuid())
+  userId       String?
+  email        String
+  code         String
+  purpose      String    // "signup_verify", "password_reset"
+  attempts     Int       @default(0)
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  user         User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email])
+  @@index([expiresAt])
+}
+
+model GameScore {
+  id           String    @id @default(cuid())
+  userId       String
+  gameId       String
+  score        Int
+  level        Int       @default(1)
+  accuracy     Float     @default(0)
+  duration     Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}

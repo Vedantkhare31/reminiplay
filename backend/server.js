@@ -15,20 +15,27 @@ dotenv.config();
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:5000',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'http://127.0.0.1:5000',
   'https://reminiplay.vercel.app',
   /\.vercel\.app$/,
+  /^http:\/\/localhost:\d+$/,
+  /^http:\/\/127\.0\.0\.1:\d+$/,
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    
-    const isAllowed = allowedOrigins.some(allowed => {
+
+    const isLocal = origin.includes('localhost') || origin.includes('127.0.0.1');
+    const isAllowed = isLocal || allowedOrigins.some(allowed => {
       if (typeof allowed === 'string') return allowed === origin;
       if (allowed instanceof RegExp) return allowed.test(origin);
       return false;
     });
-    
+
     if (isAllowed) {
       callback(null, true);
     } else {
@@ -63,9 +70,15 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+const authRoutes = require('./routes/authRoutes');
+
 // ============================================================
 // ROUTES
 // ============================================================
+
+// Authentication & User Data Sync
+app.use('/api/auth', authRoutes);
+app.use('/api/user', authRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

@@ -1,79 +1,162 @@
-// OTP Service - Simulates OTP sending and verification
-// In production, replace with actual API calls
+import api from '../utils/api';
 
+const extractErrorMessage = (error, defaultMsg) => {
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+  if (error.code === 'ERR_NETWORK' || error.message === 'Network Error' || error.message?.includes('Network Error')) {
+    return 'Cannot reach backend server. Please make sure server.js is running on port 5000 (cd backend && npm start)';
+  }
+  return error.friendlyMessage || error.message || defaultMsg;
+};
+
+/**
+ * ReminiPlay OTP Service
+ * Dispatches verification emails via backend SMTP service
+ * and validates 6-digit cryptographic OTPs.
+ */
 class OTPService {
-  constructor() {
-    // Store OTPs temporarily (in production, this would be on the server)
-    this.otpStorage = {};
-  }
-
-  // Generate a random 6-digit OTP
-  generateOTP() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  }
-
-  // Send OTP via Email (simulated)
-  async sendOTPByEmail(email, otp) {
-    console.log(`📧 Sending OTP ${otp} to ${email}`);
-    
-    // In production, this would be an API call
-    // For demo, we'll just store it and show an alert
-    this.otpStorage[email] = otp;
-    
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Show OTP in alert for demo purposes
-    alert(`📧 OTP sent to ${email}\n\nYour OTP is: ${otp}\n\n(Check console for details)`);
-    
-    return { success: true, message: 'OTP sent successfully' };
-  }
-
-  // Send OTP via SMS (simulated)
-  async sendOTPByPhone(phone, otp) {
-    console.log(`📱 Sending OTP ${otp} to ${phone}`);
-    
-    this.otpStorage[phone] = otp;
-    
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    alert(`📱 OTP sent to ${phone}\n\nYour OTP is: ${otp}\n\n(Check console for details)`);
-    
-    return { success: true, message: 'OTP sent successfully' };
-  }
-
-  // Verify OTP
-  verifyOTP(identifier, otp) {
-    const storedOTP = this.otpStorage[identifier];
-    
-    if (!storedOTP) {
-      return { success: false, message: 'No OTP found. Please request a new OTP.' };
+  /**
+   * Send OTP via Email
+   * @param {string} email
+   * @param {string} purpose - 'signup' | 'password_reset'
+   */
+  async sendOTP(email, purpose = 'signup') {
+    try {
+      const response = await api.post('/api/auth/send-otp', {
+        email: email.trim().toLowerCase(),
+        purpose,
+      });
+      return {
+        success: true,
+        message: response.data.message || 'OTP sent successfully',
+        deliveredLive: response.data.deliveredLive,
+        devCode: response.data.devCode,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: extractErrorMessage(error, 'Failed to send OTP'),
+      };
     }
-    
-    if (storedOTP === otp) {
-      // Clear OTP after successful verification
-      delete this.otpStorage[identifier];
-      return { success: true, message: 'OTP verified successfully' };
-    }
-    
-    return { success: false, message: 'Invalid OTP. Please try again.' };
   }
 
-  // Resend OTP
-  resendOTP(identifier) {
-    const newOTP = this.generateOTP();
-    this.otpStorage[identifier] = newOTP;
-    
-    // Determine if it's email or phone
-    const isEmail = identifier.includes('@');
-    
-    if (isEmail) {
-      alert(`📧 New OTP sent to ${identifier}\n\nYour OTP is: ${newOTP}`);
-    } else {
-      alert(`📱 New OTP sent to ${identifier}\n\nYour OTP is: ${newOTP}`);
+  /**
+   * Verify 6-digit OTP code with backend
+   * @param {string} email
+   * @param {string} otp
+   * @param {string} purpose
+   */
+  async verifyOTP(email, otp, purpose = 'signup') {
+    try {
+      const response = await api.post('/api/auth/verify-otp', {
+        email: email.trim().toLowerCase(),
+        otp: otp.trim(),
+        purpose,
+      });
+      return {
+        success: true,
+        message: response.data.message || 'OTP verified successfully',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: extractErrorMessage(error, 'Invalid or expired OTP code'),
+      };
     }
-    
-    return { success: true, message: 'OTP resent successfully', otp: newOTP };
+  }
+
+  /**
+   * Register a new verified account
+   */
+  async register({ name, email, password, role, otp }) {
+    try {
+      const response = await api.post('/api/auth/register', {
+        name,
+        email: email.trim().toLowerCase(),
+        password,
+        role,
+        otp: otp.trim(),
+      });
+      return {
+        success: true,
+        token: response.data.token,
+        user: response.data.user,
+        message: response.data.message,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: extractErrorMessage(error, 'Registration failed'),
+        criteria: error.response?.data?.criteria,
+      };
+    }
+  }
+
+  /**
+   * Authenticate existing registered account
+   */
+  async login(email, password) {
+    try {
+      const response = await api.post('/api/auth/login', {
+        email: email.trim().toLowerCase(),
+        password,
+      });
+      return {
+        success: true,
+        token: response.data.token,
+        user: response.data.user,
+        message: response.data.message,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: extractErrorMessage(error, 'Login failed. Please verify credentials.'),
+      };
+    }
+  }
+
+  /**
+   * Reset forgotten password with OTP
+   */
+  async resetPassword({ email, otp, newPassword }) {
+    try {
+      const response = await api.post('/api/auth/forgot-password/reset', {
+        email: email.trim().toLowerCase(),
+        otp: otp.trim(),
+        newPassword,
+      });
+      return {
+        success: true,
+        message: response.data.message,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: extractErrorMessage(error, 'Password reset failed'),
+        criteria: error.response?.data?.criteria,
+      };
+    }
+  }
+
+  /**
+   * Sign in / sign up with Google
+   */
+  async googleAuth(profile) {
+    try {
+      const response = await api.post('/api/auth/google', profile);
+      return {
+        success: true,
+        token: response.data.token,
+        user: response.data.user,
+        message: response.data.message,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: extractErrorMessage(error, 'Google sign-in failed'),
+      };
+    }
   }
 }
 

@@ -1,158 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Webcam from 'react-webcam';
-// Swapped the old @tensorflow-models/handpose (2020-era, single-scale, no
-// confidence gating) for @tensorflow-models/hand-pose-detection running the
-// MediaPipe Hands topology. It's meaningfully more accurate and stable, and
-// — critically for this component — every prediction comes with a `score`
-// we can use to reject low-confidence noise instead of trusting every frame.
 import * as handPoseDetection from '@tensorflow-models/hand-pose-detection';
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-backend-webgl';
 import { 
   ArrowLeft, Camera, Eye, EyeOff, RefreshCw, 
   Trophy, Sparkles, Play, Volume2, VolumeX,
-  Pause, AlertCircle, Settings, Sliders, X
+  Pause, AlertCircle, Settings, Sliders, X,
+  Zap, Heart, PlusCircle, Compass, Hash, Navigation
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { SHAPE_LIBRARY, getShapeForLevel, getVariationWaypoints } from './shapeLibrary';
 
 // ============================================================
-// SHAPE DATABASE - Different ways to draw each shape
+// GEOMETRIC HELPER MATH
 // ============================================================
 
-const SHAPE_LIBRARY = {
-  rectangle: {
-    name: 'Rectangle',
-    icon: '▭',
-    variations: [
-      // Variation 1: Standard rectangle (top-left → top-right → bottom-right → bottom-left)
-      { points: [{x: 0.2, y: 0.2}, {x: 0.8, y: 0.2}, {x: 0.8, y: 0.8}, {x: 0.2, y: 0.8}], description: 'Standard rectangle' },
-      // Variation 2: Wide rectangle
-      { points: [{x: 0.1, y: 0.3}, {x: 0.9, y: 0.3}, {x: 0.9, y: 0.7}, {x: 0.1, y: 0.7}], description: 'Wide rectangle' },
-      // Variation 3: Tall rectangle
-      { points: [{x: 0.3, y: 0.1}, {x: 0.7, y: 0.1}, {x: 0.7, y: 0.9}, {x: 0.3, y: 0.9}], description: 'Tall rectangle' },
-      // Variation 4: Diamond rectangle (rotated)
-      { points: [{x: 0.5, y: 0.15}, {x: 0.85, y: 0.5}, {x: 0.5, y: 0.85}, {x: 0.15, y: 0.5}], description: 'Diamond shape' },
-    ]
-  },
-  circle: {
-    name: 'Circle',
-    icon: '○',
-    variations: [
-      { points: getCirclePoints(0.5, 0.5, 0.3, 12), description: 'Standard circle' },
-      { points: getCirclePoints(0.5, 0.5, 0.35, 14), description: 'Large circle' },
-      { points: getCirclePoints(0.5, 0.5, 0.25, 10), description: 'Small circle' },
-      { points: getCirclePoints(0.5, 0.5, 0.3, 16), description: 'Detailed circle' },
-    ]
-  },
-  triangle: {
-    name: 'Triangle',
-    icon: '△',
-    variations: [
-      { points: [{x: 0.5, y: 0.1}, {x: 0.9, y: 0.9}, {x: 0.1, y: 0.9}], description: 'Standard triangle' },
-      { points: [{x: 0.5, y: 0.1}, {x: 0.8, y: 0.9}, {x: 0.2, y: 0.9}], description: 'Narrow triangle' },
-      { points: [{x: 0.5, y: 0.1}, {x: 0.9, y: 0.8}, {x: 0.1, y: 0.8}], description: 'Wide triangle' },
-      { points: [{x: 0.3, y: 0.2}, {x: 0.8, y: 0.8}, {x: 0.2, y: 0.8}], description: 'Leaning triangle' },
-    ]
-  },
-  star: {
-    name: 'Star',
-    icon: '★',
-    variations: [
-      { points: getStarPoints(0.5, 0.5, 0.35, 0.15, 5), description: '5-point star' },
-      { points: getStarPoints(0.5, 0.5, 0.3, 0.12, 5), description: 'Small star' },
-      { points: getStarPoints(0.5, 0.5, 0.4, 0.18, 5), description: 'Large star' },
-    ]
-  },
-  heart: {
-    name: 'Heart',
-    icon: '♥',
-    variations: [
-      { points: getHeartPoints(0.5, 0.5, 0.3), description: 'Standard heart' },
-      { points: getHeartPoints(0.5, 0.5, 0.35), description: 'Large heart' },
-      { points: getHeartPoints(0.5, 0.5, 0.25), description: 'Small heart' },
-    ]
-  },
-  pentagon: {
-    name: 'Pentagon',
-    icon: '⬠',
-    variations: [
-      { points: getPolygonPoints(0.5, 0.5, 0.32, 5), description: 'Standard pentagon' },
-      { points: getPolygonPoints(0.5, 0.5, 0.37, 5), description: 'Large pentagon' },
-    ]
-  },
-  arrow: {
-    name: 'Arrow',
-    icon: '➤',
-    variations: [
-      { points: getArrowPoints(0.5, 0.5, 0.28), description: 'Right-pointing arrow' },
-    ]
-  }
-};
-
-// Helper functions to generate shape points
-function getCirclePoints(cx, cy, r, segments) {
-  const points = [];
-  for (let i = 0; i <= segments; i++) {
-    const angle = (i / segments) * 2 * Math.PI;
-    points.push({
-      x: cx + r * Math.cos(angle),
-      y: cy + r * Math.sin(angle)
-    });
-  }
-  return points;
-}
-
-function getStarPoints(cx, cy, outerR, innerR, points) {
-  const result = [];
-  for (let i = 0; i < points * 2; i++) {
-    const radius = i % 2 === 0 ? outerR : innerR;
-    const angle = (i / (points * 2)) * 2 * Math.PI - Math.PI / 2;
-    result.push({
-      x: cx + radius * Math.cos(angle),
-      y: cy + radius * Math.sin(angle)
-    });
-  }
-  return result;
-}
-
-function getHeartPoints(cx, cy, size) {
-  const points = [];
-  const segments = 20;
-  for (let i = 0; i <= segments; i++) {
-    const t = (i / segments) * 2 * Math.PI;
-    const x = 16 * Math.pow(Math.sin(t), 3);
-    const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
-    points.push({
-      x: cx + (x / 16) * size,
-      y: cy - (y / 16) * size
-    });
-  }
-  return points;
-}
-
-function getPolygonPoints(cx, cy, r, sides, rotation = -Math.PI / 2) {
-  const points = [];
-  for (let i = 0; i < sides; i++) {
-    const angle = rotation + (i / sides) * 2 * Math.PI;
-    points.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
-  }
-  return points;
-}
-
-function getArrowPoints(cx, cy, size) {
-  const w = size, h = size * 0.6;
-  return [
-    { x: cx - w, y: cy - h * 0.3 },
-    { x: cx + w * 0.2, y: cy - h * 0.3 },
-    { x: cx + w * 0.2, y: cy - h * 0.7 },
-    { x: cx + w, y: cy },
-    { x: cx + w * 0.2, y: cy + h * 0.7 },
-    { x: cx + w * 0.2, y: cy + h * 0.3 },
-    { x: cx - w, y: cy + h * 0.3 },
-  ];
-}
-
-// Closest point to p on the line segment a→b (t is how far along the segment, 0..1)
 function closestPointOnSegment(p, a, b) {
   const abx = b.x - a.x, aby = b.y - a.y;
   const apx = p.x - a.x, apy = p.y - a.y;
@@ -162,10 +26,6 @@ function closestPointOnSegment(p, a, b) {
   return { x: a.x + t * abx, y: a.y + t * aby, t };
 }
 
-// Closest point to p anywhere on the closed shape outline (closedPoints must
-// already include the closing point back to the start). Also returns which
-// segment it landed on and how far along it — used to track how much of the
-// outline the patient has actually traced (for live progress / auto-complete).
 function closestPointOnShape(p, closedPoints) {
   let best = null, bestDist = Infinity, bestSegment = 0;
   for (let i = 0; i < closedPoints.length - 1; i++) {
@@ -177,54 +37,64 @@ function closestPointOnShape(p, closedPoints) {
       bestSegment = i;
     }
   }
-  return { point: best, distance: bestDist, segment: bestSegment, t: best.t };
+  return { point: best, distance: bestDist, segment: bestSegment, t: best ? best.t : 0 };
 }
 
 // ============================================================
-// TUNABLE HAND-TRACKING CONSTANTS
-// Adjust these if tracking feels wrong for your camera/lighting/setup.
-// ============================================================
-const DEFAULT_PINCH_THRESHOLD = 0.055; // fraction of frame width; smaller = stricter pinch to start drawing (user-adjustable in-game). Was 0.08 — fingers count as "pinched" any time they're within 8% of frame width, which for most webcam distances is close to a relaxed open hand, causing drawing to fire unintentionally.
-const SMOOTHING = 0.4;         // 0 = raw/jumpy, 1 = frozen/laggy — how much each point blends with the last
-const SNAP_RADIUS = 0.045;     // how close to the target path before auto-correct pulls the point onto it. Was 0.09 — wide enough that almost any stroke drawn somewhere in the shape's general area got glued onto the outline before scoring, which is why a rough line could score as a clean circle.
-const SNAP_STRENGTH = 0.35;    // 0 = no correction, 1 = snaps fully onto the path. Lowered from 0.5 alongside the radius so even in-range points get a gentler nudge, not a near-total rewrite of where they were actually drawn.
-const MIRROR_X = true;         // flip this if the tracked dot moves opposite to your real hand
-const MIN_HAND_CONFIDENCE = 0.65; // reject low-confidence detections instead of trusting every frame
-
-// ============================================================
-// SOUND + STORAGE HELPERS
+// AUDIO SOUND SYNTHESIS
 // ============================================================
 
-// Tiny synthesized chimes — no audio files to ship, works offline.
 function playTone(freq, duration, type = 'sine', delay = 0) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
     setTimeout(() => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = type;
       osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.setValueAtTime(0.16, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + duration / 1000);
     }, delay);
-  } catch (e) {
-    // Web Audio not available — fail silently, sound is a nice-to-have.
-  }
+  } catch (e) {}
 }
-const playSuccessSound = () => { playTone(523.25, 120); playTone(659.25, 120, 'sine', 90); playTone(783.99, 220, 'sine', 180); };
-const playHighScoreSound = () => { playTone(659.25, 100); playTone(880, 100, 'sine', 90); playTone(1046.5, 300, 'sine', 180); };
-const playFailSound = () => playTone(200, 220, 'sawtooth');
+
+const playWaypointSound = (idx) => {
+  const baseFreq = 520 + (idx * 90);
+  playTone(baseFreq, 80, 'triangle');
+};
+
+const playStartSound = () => {
+  playTone(440, 70, 'sine');
+  playTone(554.37, 100, 'sine', 60);
+};
+
+const playSuccessSound = () => {
+  playTone(523.25, 120);
+  playTone(659.25, 120, 'sine', 90);
+  playTone(783.99, 150, 'sine', 180);
+  playTone(1046.5, 300, 'sine', 270);
+};
+
+const playHighScoreSound = () => {
+  playTone(659.25, 100);
+  playTone(880, 100, 'sine', 90);
+  playTone(1046.5, 350, 'sine', 180);
+};
+
+const playFailSound = () => {
+  playTone(240, 160, 'sawtooth');
+  playTone(180, 240, 'sawtooth', 120);
+};
 
 const HIGH_SCORE_KEY = 'gestureDrawing_highScore';
 const BEST_STREAK_KEY = 'gestureDrawing_bestStreak';
 
-// 21-point MediaPipe hand skeleton connections, used to draw the little
-// tracking overlay on the webcam preview so the player can see the AI is
-// actually locking onto their hand (and how well).
 const HAND_CONNECTIONS = [
   [0,1],[1,2],[2,3],[3,4],
   [0,5],[5,6],[6,7],[7,8],
@@ -235,122 +105,198 @@ const HAND_CONNECTIONS = [
 ];
 
 // ============================================================
-// MAIN GAME COMPONENT
+// 1-EURO ADAPTIVE FILTER (Zero-latency + Jitter-free smoothing)
+// ============================================================
+class OneEuroFilter {
+  constructor(minCutoff = 1.0, beta = 0.06, dCutoff = 1.0) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.x = null;
+    this.dx = 0;
+    this.lastTime = null;
+  }
+
+  alpha(rate, cutoff) {
+    const tau = 1.0 / (2 * Math.PI * cutoff);
+    const te = 1.0 / rate;
+    return 1.0 / (1.0 + tau / te);
+  }
+
+  filter(val, timestamp) {
+    if (this.lastTime === null) {
+      this.x = val;
+      this.lastTime = timestamp;
+      return val;
+    }
+    const dt = Math.max((timestamp - this.lastTime) / 1000, 1e-4);
+    this.lastTime = timestamp;
+    const rate = 1.0 / dt;
+
+    const dVal = (val - this.x) / dt;
+    const alphaD = this.alpha(rate, this.dCutoff);
+    this.dx = this.dx * (1 - alphaD) + dVal * alphaD;
+
+    const cutoff = this.minCutoff + this.beta * Math.abs(this.dx);
+    const alphaVal = this.alpha(rate, cutoff);
+    this.x = this.x * (1 - alphaVal) + val * alphaVal;
+    return this.x;
+  }
+
+  reset() {
+    this.x = null;
+    this.dx = 0;
+    this.lastTime = null;
+  }
+}
+
+// ============================================================
+// MAIN COMPONENT
 // ============================================================
 
 const GestureDrawing = () => {
   const navigate = useNavigate();
+  const { user, syncProgress } = useAuth();
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const demoCanvasRef = useRef(null);
-  
-  // Game state
+  const previewCanvasRef = useRef(null);
+  const confettiCanvasRef = useRef(null);
+  const confettiAnimRef = useRef(null);
+
+  // Game Progression State
   const [isLoading, setIsLoading] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
-  const [score, setScore] = useState(0);
-  const [level, setLevel] = useState(1);
-  const [lives, setLives] = useState(3);
-  const [coins, setCoins] = useState(0);
-  const [showTutorial, setShowTutorial] = useState(true);
-  const [showVideo, setShowVideo] = useState(true);
-  const [shapeName, setShapeName] = useState('');
-  const [shapeVariation, setShapeVariation] = useState(null);
-  const [userDrawing, setUserDrawing] = useState([]);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [accuracy, setAccuracy] = useState(0);
-  const [message, setMessage] = useState('');
-  const [detectorModel, setDetectorModel] = useState(null); // MediaPipe Hands detector instance, once loaded
-  const [isCameraReady, setIsCameraReady] = useState(false);
-  const [matchedVariation, setMatchedVariation] = useState(null);
-  const [fingerPos, setFingerPos] = useState(null); // live fingertip position for the mini preview dot
-  const [handConfidence, setHandConfidence] = useState(0); // 0-100, live AI detection confidence
-
-  // --- Extra features ---
+  const [score, setScore] = useState(user?.score || 0);
+  const [level, setLevel] = useState(user?.level || 1);
+  const [checkpointLevel, setCheckpointLevel] = useState(user?.gameStats?.checkpointLevel || 1);
+  const [lives, setLives] = useState(user?.gameStats?.lives || 3);
+  const [coins, setCoins] = useState(user?.coins ?? 100);
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
   const [highScore, setHighScore] = useState(0);
   const [isNewHighScore, setIsNewHighScore] = useState(false);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [showHint, setShowHint] = useState(true); // faint target overlay on the drawing canvas
-  const [pinchSensitivity, setPinchSensitivity] = useState(DEFAULT_PINCH_THRESHOLD);
 
-  // --- Sensitivity Controls ---
+  // Sync state from logged-in user profile
+  useEffect(() => {
+    if (user) {
+      if (user.coins !== undefined) setCoins(user.coins);
+      if (user.score !== undefined) setScore(user.score);
+      if (user.level !== undefined) setLevel(user.level);
+      if (user.gameStats?.checkpointLevel) setCheckpointLevel(user.gameStats.checkpointLevel);
+    }
+  }, [user]);
+
+  // Persist game stats to database across devices
+  const persistStats = useCallback((newCoins, newScore, newLevel, newCheckpoint, newLives) => {
+    if (syncProgress) {
+      syncProgress({
+        coins: newCoins !== undefined ? newCoins : coins,
+        score: newScore !== undefined ? newScore : score,
+        level: newLevel !== undefined ? newLevel : level,
+        gameStats: {
+          checkpointLevel: newCheckpoint !== undefined ? newCheckpoint : checkpointLevel,
+          lives: newLives !== undefined ? newLives : lives,
+          highScore,
+          bestStreak,
+        },
+      });
+    }
+  }, [syncProgress, coins, score, level, checkpointLevel, lives, highScore, bestStreak]);
+
+  // Shape and Waypoint State
+  const [currentShape, setCurrentShape] = useState(null);
+  const [activeWaypoints, setActiveWaypoints] = useState([]);
+  const [targetWaypointIdx, setTargetWaypointIdx] = useState(0);
+  const [passedWaypoints, setPassedWaypoints] = useState([]);
+  const [stepGuidance, setStepGuidance] = useState('');
+
+  // Hint Toggle Options (User-requested granular controls)
+  const [showOutline, setShowOutline] = useState(true);
+  const [showNumbers, setShowNumbers] = useState(true);
+  const [showArrows, setShowArrows] = useState(true);
+
+  // Drawing Mode: 'pinch' (precision touch, default) vs 'point' (direct index finger air-draw)
+  const [drawMode, setDrawMode] = useState('pinch');
+  const drawModeRef = useRef('pinch');
+  useEffect(() => { drawModeRef.current = drawMode; }, [drawMode]);
+
+  // Drawing & Tracking State
+  const [userDrawing, setUserDrawing] = useState([]);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [isPinchingFingers, setIsPinchingFingers] = useState(false);
+  const [accuracy, setAccuracy] = useState(0);
+  const [message, setMessage] = useState('');
+  const [detectorModel, setDetectorModel] = useState(null);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [handConfidence, setHandConfidence] = useState(0);
+
+  // Controls & Settings
+  const [showTutorial, setShowTutorial] = useState(true);
+  const [showVideo, setShowVideo] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [sensitivitySettings, setSensitivitySettings] = useState({
-    smoothing: SMOOTHING,
-    minMovement: 0.008,
-    pinchThreshold: DEFAULT_PINCH_THRESHOLD,
-    snapStrength: SNAP_STRENGTH,
-    snapRadius: SNAP_RADIUS,
+    smoothing: 0.5,
+    pinchThreshold: 0.075,      // Calibrated natural pinch: 0.075 frame width (~48px)
+    pinchRatioThreshold: 0.42,  // Scale-invariant palm-to-pinch ratio
+    snapStrength: 0.0,          // 0 by default to prevent zigzag/stair-stepping oscillation
+    snapRadius: 0.055,
   });
 
-  // Get available shapes
-  const shapeKeys = Object.keys(SHAPE_LIBRARY);
-  const [currentShapeKey, setCurrentShapeKey] = useState(shapeKeys[0]);
-
-  // Ref used to cancel/replace the demo trace animation
-  const demoAnimRef = useRef(null);
-  // Ref that always points at the freshest "do one tracking frame" function,
-  // so a single, never-restarted requestAnimationFrame loop can call it
-  // without stale-closure bugs and without tearing itself down on every render.
-  const tickRef = useRef(() => {});
-  // How far along the shape's outline the patient has traced so far (0..1),
-  // used for the live auto-correct accuracy meter and to auto-detect a
-  // finished drawing without requiring an exact pinch release.
-  const maxProgressRef = useRef(0);
-  // Smooths raw, jittery landmark positions frame-to-frame.
-  const smoothPosRef = useRef(null);
-  // Prevents a slow inference call from piling up behind another one.
+  // Refs for tracking loop to prevent stale closures and lag
   const isProcessingRef = useRef(false);
-  // Tracks last position for minimum movement filter
-  const lastPosRef = useRef(null);
-  // Counts consecutive frames where the model returned a "hand" whose
-  // score/keypoints were NaN instead of returning no hand at all — a known
-  // compatibility issue on some GPU/browser combos with this runtime. Used
-  // to tell "no hand in view" apart from "the model is returning garbage".
-  const nanStreakRef = useRef(0);
-  // Tracks whether the on-screen message is currently showing a tracking
-  // error, so handleFrame doesn't call setMessage every single frame.
-  const trackingErrorShownRef = useRef(false);
-  // Mirrors state that handleFrame (called from the raf loop via tickRef)
-  // needs read-fresh every frame without re-subscribing anything.
-  const pinchSensitivityRef = useRef(DEFAULT_PINCH_THRESHOLD);
+  const tickRef = useRef(() => {});
+  const demoAnimRef = useRef(null);
+  const smoothPosRef = useRef(null);
+  const isDrawingRef = useRef(false);
+  const targetWaypointIdxRef = useRef(0);
+  const passedWaypointsRef = useRef([]);
+  const activeWaypointsRef = useRef([]);
+  const unpinchDebounceRef = useRef(0);
+  const loadStartedRef = useRef(false);
   const soundEnabledRef = useRef(true);
-  // Canvas overlaid on the little webcam preview, used to draw the live
-  // hand skeleton so the player can *see* the AI locking onto their hand.
-  const previewCanvasRef = useRef(null);
-  // Canvas overlaid on the user's drawing panel for the success confetti burst.
-  const confettiCanvasRef = useRef(null);
-  const confettiAnimRef = useRef(null);
+  const sensitivitySettingsRef = useRef(sensitivitySettings);
+  const hadHandRef = useRef(false);
 
-  useEffect(() => { pinchSensitivityRef.current = pinchSensitivity; }, [pinchSensitivity]);
+  // Ultra-smooth 60fps tracking & zero-lag decoupled drawing refs
+  const userDrawingRef = useRef([]);
+  const filterXRef = useRef(new OneEuroFilter(0.8, 0.010, 0.6));
+  const filterYRef = useRef(new OneEuroFilter(0.8, 0.010, 0.6));
+  const isPinchingRef = useRef(false);
+  const lastConfidenceUpdateRef = useRef(0);
+  const fingerCursorRef = useRef(null);
+
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
+  useEffect(() => { sensitivitySettingsRef.current = sensitivitySettings; }, [sensitivitySettings]);
+  useEffect(() => { isDrawingRef.current = isDrawing; }, [isDrawing]);
+  useEffect(() => { targetWaypointIdxRef.current = targetWaypointIdx; }, [targetWaypointIdx]);
+  useEffect(() => { passedWaypointsRef.current = passedWaypoints; }, [passedWaypoints]);
+  useEffect(() => { activeWaypointsRef.current = activeWaypoints; }, [activeWaypoints]);
 
-  // Load persisted high score / best streak once on mount.
+  // Load High Score on Mount
   useEffect(() => {
     try {
       const storedHigh = parseInt(localStorage.getItem(HIGH_SCORE_KEY), 10);
       if (!isNaN(storedHigh)) setHighScore(storedHigh);
       const storedStreak = parseInt(localStorage.getItem(BEST_STREAK_KEY), 10);
       if (!isNaN(storedStreak)) setBestStreak(storedStreak);
-    } catch (e) {
-      // localStorage unavailable (private browsing, etc.) — not critical.
-    }
+    } catch (e) {}
   }, []);
 
-  // Little canvas confetti burst, fired on a successful shape match.
+  // Confetti Burst Animation
   const triggerConfetti = useCallback(() => {
     const canvas = confettiCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const colors = ['#4f6df5', '#10b981', '#f59e0b', '#ef4444', '#a855f7'];
-    const particles = Array.from({ length: 50 }, () => ({
+    const colors = ['#10b981', '#4f6df5', '#f59e0b', '#ec4899', '#8b5cf6'];
+    const particles = Array.from({ length: 65 }, () => ({
       x: canvas.width / 2,
       y: canvas.height / 2,
-      vx: (Math.random() - 0.5) * 9,
-      vy: (Math.random() - 1.3) * 9,
+      vx: (Math.random() - 0.5) * 11,
+      vy: (Math.random() - 1.25) * 11,
       size: Math.random() * 5 + 3,
       color: colors[Math.floor(Math.random() * colors.length)],
       life: 1,
@@ -362,8 +308,8 @@ const GestureDrawing = () => {
       particles.forEach(p => {
         p.x += p.vx;
         p.y += p.vy;
-        p.vy += 0.25;
-        p.life -= 0.02;
+        p.vy += 0.28;
+        p.life -= 0.018;
         if (p.life > 0) {
           alive = true;
           ctx.globalAlpha = Math.max(p.life, 0);
@@ -378,105 +324,204 @@ const GestureDrawing = () => {
     animate();
   }, []);
 
-  // Draw the live hand skeleton onto the mini webcam preview, in the
-  // preview's own pixel space (scaled from the raw video frame).
-  const drawHandSkeleton = useCallback((keypoints, videoWidth, videoHeight) => {
+  // ============================================================
+  // CAMERA PREVIEW RENDERER (NO Outline Guide — ONLY START POINT)
+  // ============================================================
+  const drawCameraPreview = useCallback((keypoints, videoWidth, videoHeight, isPinching, targetIdx, waypoints) => {
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const scaleX = canvas.width / videoWidth;
-    const scaleY = canvas.height / videoHeight;
-    // keypoints are already in mirrored space (estimateHands was called
-    // with flipHorizontal: true, same as the fingertip dot below), and this
-    // canvas has no CSS mirror of its own — unlike the <Webcam> it sits on
-    // top of. Flipping a second time here drew the skeleton on the wrong
-    // side of the preview, opposite the fingertip dot and the real hand.
+
+    const scaleX = canvas.width / (videoWidth || 640);
+    const scaleY = canvas.height / (videoHeight || 480);
     const mx = (x) => x * scaleX;
     const my = (y) => y * scaleY;
 
-    ctx.strokeStyle = 'rgba(16, 185, 129, 0.9)';
-    ctx.lineWidth = 2;
-    HAND_CONNECTIONS.forEach(([a, b]) => {
-      const pa = keypoints[a], pb = keypoints[b];
-      if (!pa || !pb) return;
+    // 1. ONLY Draw START POINT in the Camera Box (NO outline guide, as requested!)
+    if (waypoints && waypoints.length > 0) {
+      const startWp = waypoints[0];
+      const wx = startWp.x * canvas.width;
+      const wy = startWp.y * canvas.height;
+
+      ctx.save();
+      // Glowing Start Beacon in Camera Preview
+      const pulse = (Math.sin(Date.now() / 140) + 1) / 2;
+
+      // Outer animated pulsating halo
       ctx.beginPath();
-      ctx.moveTo(mx(pa.x), my(pa.y));
-      ctx.lineTo(mx(pb.x), my(pb.y));
-      ctx.stroke();
-    });
-    keypoints.forEach((kp, i) => {
-      ctx.beginPath();
-      ctx.arc(mx(kp.x), my(kp.y), i === 8 || i === 4 ? 3.5 : 2, 0, 2 * Math.PI);
-      ctx.fillStyle = i === 8 ? '#f59e0b' : i === 4 ? '#4f6df5' : '#10b981';
+      ctx.arc(wx, wy, 20 + pulse * 12, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
       ctx.fill();
-    });
+      ctx.strokeStyle = 'rgba(16, 185, 129, 0.9)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // Precision crosshairs
+      ctx.strokeStyle = 'rgba(16, 185, 129, 0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(wx - 18, wy); ctx.lineTo(wx + 18, wy);
+      ctx.moveTo(wx, wy - 18); ctx.lineTo(wx, wy + 18);
+      ctx.stroke();
+
+      // Center Start Core
+      ctx.beginPath();
+      ctx.arc(wx, wy, 13, 0, 2 * Math.PI);
+      ctx.fillStyle = targetIdx === 0 ? '#10b981' : '#64748b';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Label text
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(targetIdx === 0 ? 'START' : '✓', wx, wy);
+
+      if (targetIdx === 0) {
+        ctx.fillStyle = '#10b981';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.shadowColor = '#000000';
+        ctx.shadowBlur = 4;
+        ctx.fillText('🟢 START HERE', wx, wy - 24);
+      }
+      ctx.restore();
+    }
+
+    // 2. Draw Hand Skeleton (if hand is detected)
+    if (keypoints && keypoints.length === 21) {
+      ctx.strokeStyle = isPinching ? 'rgba(16, 185, 129, 0.95)' : 'rgba(245, 158, 11, 0.75)';
+      ctx.lineWidth = 2;
+      HAND_CONNECTIONS.forEach(([a, b]) => {
+        const pa = keypoints[a], pb = keypoints[b];
+        if (!pa || !pb) return;
+        ctx.beginPath();
+        ctx.moveTo(mx(pa.x), my(pa.y));
+        ctx.lineTo(mx(pb.x), my(pb.y));
+        ctx.stroke();
+      });
+
+      keypoints.forEach((kp, i) => {
+        ctx.beginPath();
+        ctx.arc(mx(kp.x), my(kp.y), i === 8 || i === 4 ? 5 : 2, 0, 2 * Math.PI);
+        ctx.fillStyle = i === 8 ? (isPinching ? '#10b981' : '#f59e0b') : i === 4 ? '#3b82f6' : '#94a3b8';
+        ctx.fill();
+        if (i === 8 || i === 4) {
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      });
+
+      // Line between thumb tip and index tip showing pinch gap
+      const pIndex = keypoints[8];
+      const pThumb = keypoints[4];
+      if (pIndex && pThumb) {
+        ctx.beginPath();
+        ctx.moveTo(mx(pIndex.x), my(pIndex.y));
+        ctx.lineTo(mx(pThumb.x), my(pThumb.y));
+        ctx.strokeStyle = isPinching ? '#10b981' : 'rgba(245, 158, 11, 0.6)';
+        ctx.lineWidth = isPinching ? 3 : 1.5;
+        if (!isPinching) ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Check proximity to Start Point
+      if (targetIdx === 0 && waypoints && waypoints.length > 0) {
+        const startWp = waypoints[0];
+        const sx = startWp.x * canvas.width;
+        const sy = startWp.y * canvas.height;
+        const fx = mx(pIndex.x);
+        const fy = my(pIndex.y);
+        const dist = Math.hypot(fx - sx, fy - sy);
+
+        if (dist < 42) {
+          ctx.save();
+          ctx.fillStyle = '#10b981';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.shadowColor = '#000000';
+          ctx.shadowBlur = 4;
+          ctx.fillText('🎯 AT START! PINCH TO DRAW', sx, sy + 32);
+          ctx.restore();
+        }
+      }
+    }
   }, []);
 
-  // Load hand-tracking model.
-  //
-  // Ground truth from testing: the 'tfjs' runtime (both WebGL AND CPU
-  // backend) reliably returns NaN score/keypoints on this setup — so this
-  // is NOT the WebGL-specific issue tensorflow/tfjs#7204 describes, it's
-  // the whole 'tfjs' runtime path being unusable here. The 'mediapipe'
-  // runtime (MediaPipe's own WASM pipeline, bypassing tfjs kernels
-  // entirely) is the one Google's own demo relies on and is the only path
-  // that actually returns real data — so it's the target, not a fallback.
-  //
-  // Two things were breaking mediapipe runtime loading itself:
-  //  1. An unpinned solutionPath ('.../@mediapipe/hands' with no version)
-  //     can resolve the JS loader glue and the .wasm binary to DIFFERENT
-  //     published versions (independently cached by the CDN) — a known
-  //     cause of the "Module.arguments has been replaced with plain
-  //     arguments_" abort. Pinning an exact version fixes this by
-  //     guaranteeing the glue and binary always match.
-  //  2. React 18 Strict Mode runs effects twice in development, so this
-  //     effect can fire twice back-to-back. The legacy MediaPipe WASM
-  //     loader keeps global state on `window.Module` and does not
-  //     tolerate two concurrent loads stepping on each other — also a
-  //     documented cause of the same abort. loadStartedRef below ensures
-  //     we only ever kick off one load.
-  const loadStartedRef = useRef(false);
+  // Generate a new random shape based on current player level (Progressive Difficulty)
+  const generateNewShape = useCallback((targetLevel = level) => {
+    const shape = getShapeForLevel(targetLevel, currentShape?.key);
+    const waypoints = getVariationWaypoints(shape);
+
+    setCurrentShape(shape);
+    setActiveWaypoints(waypoints);
+    setTargetWaypointIdx(0);
+    setPassedWaypoints([]);
+    setStepGuidance(`Step 1 of ${waypoints.length - 1}: Start at ${waypoints[0].label} and draw to ${waypoints[1]?.label || 'end'}`);
+    userDrawingRef.current = [];
+    setUserDrawing([]);
+    setIsDrawing(false);
+    setIsPinchingFingers(false);
+    setAccuracy(0);
+    setShowVideo(true);
+    setMessage('');
+    smoothPosRef.current = null;
+    targetWaypointIdxRef.current = 0;
+    passedWaypointsRef.current = [];
+    activeWaypointsRef.current = waypoints;
+    filterXRef.current.reset();
+    filterYRef.current.reset();
+    if (fingerCursorRef.current) {
+      fingerCursorRef.current.style.display = 'none';
+    }
+
+    if (demoAnimRef.current) cancelAnimationFrame(demoAnimRef.current);
+    const canvas = demoCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.03)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }, [level, currentShape]);
+
+  // Load Model with CDN + fallback (Using modelType: 'lite' for ultra-smooth 60 FPS)
   useEffect(() => {
     if (loadStartedRef.current) return;
     loadStartedRef.current = true;
 
     const loadModel = async () => {
       let detector = null;
-
       try {
         detector = await handPoseDetection.createDetector(
           handPoseDetection.SupportedModels.MediaPipeHands,
           {
             runtime: 'mediapipe',
-            // Pinned to an exact release so the JS loader and the .wasm
-            // binary can never mismatch. Bump this deliberately (not to
-            // a bare/unpinned tag) if you ever want a newer version.
             solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
-            modelType: 'full',
+            modelType: 'lite',
             maxHands: 1,
           }
         );
-      } catch (mediapipeError) {
-        console.warn('MediaPipe runtime failed to load, falling back to tfjs/cpu:', mediapipeError);
+      } catch (err) {
+        console.warn('MediaPipe CDN load failed, trying tfjs backend:', err);
       }
 
-      // Last-resort fallback: the tfjs runtime on CPU. Note this is known
-      // to be unreliable for this model (see comment above) — it's only
-      // here so the app doesn't stay stuck on "Loading AI model…" forever
-      // if the jsdelivr CDN is completely unreachable (e.g. blocked
-      // network) and mediapipe can't load at all.
       if (!detector) {
         try {
           await tf.setBackend('cpu');
           await tf.ready();
           detector = await handPoseDetection.createDetector(
             handPoseDetection.SupportedModels.MediaPipeHands,
-            { runtime: 'tfjs', modelType: 'full', maxHands: 1 }
+            { runtime: 'tfjs', modelType: 'lite', maxHands: 1 }
           );
-        } catch (cpuError) {
-          console.error('Failed to load handpose model on any runtime:', cpuError);
-          setMessage('⚠️ Could not load hand-tracking model. Please check your connection to cdn.jsdelivr.net and refresh.');
+        } catch (tfErr) {
+          console.error('All handpose runtimes failed:', tfErr);
+          setMessage('⚠️ Could not load hand tracking. Please check your internet connection.');
           setIsLoading(false);
           return;
         }
@@ -484,130 +529,69 @@ const GestureDrawing = () => {
 
       setDetectorModel(detector);
       setIsLoading(false);
-      generateNewShape();
+      generateNewShape(1);
     };
     loadModel();
-  }, []);
+  }, [generateNewShape]);
 
-  // Generate random shape variation
-  const generateNewShape = useCallback(() => {
-    const keys = Object.keys(SHAPE_LIBRARY);
-    const randomKey = keys[Math.floor(Math.random() * keys.length)];
-    const shape = SHAPE_LIBRARY[randomKey];
-    const variationIndex = Math.floor(Math.random() * shape.variations.length);
-    const variation = shape.variations[variationIndex];
-    
-    setCurrentShapeKey(randomKey);
-    setShapeName(shape.name);
-    setShapeVariation(variation);
-    setMatchedVariation(null);
-    setUserDrawing([]);
-    setIsDrawing(false);
-    setAccuracy(0);
-    setShowVideo(true);
-    setMessage('');
-
-    // Cancel any in-flight trace animation and blank the canvas — the actual
-    // demo plays when the user hits "Watch Demo" / "Replay Demo" (see the
-    // showVideo effect below), so it reads as a video instead of a static image.
-    if (demoAnimRef.current) cancelAnimationFrame(demoAnimRef.current);
-    maxProgressRef.current = 0;
-    smoothPosRef.current = null;
-    lastPosRef.current = null;
+  // Demo Pattern Animation (Clear sequential order tracing with step labels)
+  const animateDemoPattern = useCallback((shape) => {
     const canvas = demoCanvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = 'rgba(0,0,0,0.03)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }, []);
-
-  // Draw demo pattern on demo canvas
-  const drawDemoPattern = (points) => {
-    const canvas = demoCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw grid background
-    ctx.fillStyle = 'rgba(0,0,0,0.03)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw the shape
-    ctx.beginPath();
-    ctx.strokeStyle = '#4f6df5';
-    ctx.lineWidth = 3;
-    ctx.shadowColor = 'rgba(79, 109, 245, 0.3)';
-    ctx.shadowBlur = 10;
-    
-    points.forEach((p, i) => {
-      const x = p.x * canvas.width;
-      const y = p.y * canvas.height;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.closePath();
-    ctx.stroke();
-    
-    // Draw animated dots
-    points.forEach((p, i) => {
-      const x = p.x * canvas.width;
-      const y = p.y * canvas.height;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, 2 * Math.PI);
-      ctx.fillStyle = i === 0 ? '#10b981' : '#4f6df5';
-      ctx.fill();
-    });
-  };
-
-  // Animate the target shape being traced, point by point — this is the
-  // actual "demo video". Called when the "Watch Demo" / "Replay Demo"
-  // overlay is dismissed (see the showVideo effect further down).
-  const animateDemoPattern = useCallback((points) => {
-    const canvas = demoCanvasRef.current;
-    if (!canvas || !points || points.length === 0) return;
+    if (!canvas || !shape) return;
     if (demoAnimRef.current) cancelAnimationFrame(demoAnimRef.current);
 
     const ctx = canvas.getContext('2d');
-    const closed = [...points, points[0]];
-    const lastIdx = closed.length - 1;
-    const totalSegments = lastIdx; // n vertices + closing edge = n segments
-    const duration = 1800; // ms to trace the full shape
+    const waypoints = getVariationWaypoints(shape);
+    const pts = [...shape.points, shape.points[0]];
+    const totalSegments = pts.length - 1;
+    const duration = 2400; // ms
     const startTime = performance.now();
     const px = (p) => p.x * canvas.width;
     const py = (p) => p.y * canvas.height;
-    // Clamped accessor — guarantees drawFrame can never read past the array,
-    // regardless of any floating-point edge case in the progress math below
-    // (this is what the "Cannot read properties of undefined" crash was).
-    const at = (i) => closed[Math.max(0, Math.min(lastIdx, i))];
 
     const drawFrame = (now) => {
-      const progress = Math.min(1, (now - startTime) / duration);
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = 'rgba(0,0,0,0.03)';
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.03)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      const segmentProgress = progress * totalSegments;
-      const fullSegments = Math.max(0, Math.min(totalSegments, Math.floor(segmentProgress)));
-      const partial = Math.max(0, segmentProgress - fullSegments);
+      // Faint outline of full shape
+      ctx.save();
+      ctx.strokeStyle = 'rgba(79, 109, 245, 0.2)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(px(p), py(p));
+        else ctx.lineTo(px(p), py(p));
+      });
+      ctx.stroke();
+      ctx.restore();
+
+      // Current trace progress
+      const segProgress = progress * totalSegments;
+      const fullSegs = Math.floor(segProgress);
+      const partial = segProgress - fullSegs;
 
       ctx.beginPath();
       ctx.strokeStyle = '#4f6df5';
-      ctx.lineWidth = 3;
-      ctx.shadowColor = 'rgba(79, 109, 245, 0.3)';
-      ctx.shadowBlur = 10;
-      ctx.moveTo(px(at(0)), py(at(0)));
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = 'rgba(79, 109, 245, 0.5)';
+      ctx.shadowBlur = 8;
+      ctx.moveTo(px(pts[0]), py(pts[0]));
 
-      let cursor = { x: px(at(0)), y: py(at(0)) };
-      for (let i = 1; i <= fullSegments; i++) {
-        ctx.lineTo(px(at(i)), py(at(i)));
-        cursor = { x: px(at(i)), y: py(at(i)) };
+      let cursor = { x: px(pts[0]), y: py(pts[0]) };
+      for (let i = 1; i <= fullSegs && i < pts.length; i++) {
+        ctx.lineTo(px(pts[i]), py(pts[i]));
+        cursor = { x: px(pts[i]), y: py(pts[i]) };
       }
-      if (fullSegments < totalSegments && partial > 0) {
-        const a = at(fullSegments);
-        const b = at(fullSegments + 1);
+      if (fullSegs < totalSegments && partial > 0 && pts[fullSegs + 1]) {
+        const a = pts[fullSegs];
+        const b = pts[fullSegs + 1];
         cursor = {
           x: px(a) + (px(b) - px(a)) * partial,
           y: py(a) + (py(b) - py(a)) * partial
@@ -616,25 +600,38 @@ const GestureDrawing = () => {
       }
       ctx.stroke();
 
-      // Start-point marker
-      ctx.beginPath();
-      ctx.arc(px(at(0)), py(at(0)), 5, 0, 2 * Math.PI);
-      ctx.fillStyle = '#10b981';
-      ctx.fill();
+      // Draw all waypoints with numbers and order
+      waypoints.forEach((wp, i) => {
+        const isCompleted = (i / (waypoints.length - 1)) <= progress;
+        const isStart = i === 0;
 
-      // Moving "pen" marker showing where the trace currently is
+        ctx.beginPath();
+        ctx.arc(px(wp), py(wp), isStart ? 8 : 6, 0, 2 * Math.PI);
+        ctx.fillStyle = isCompleted ? '#10b981' : '#64748b';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(isStart ? '1' : String(i + 1), px(wp), py(wp));
+      });
+
+      // Animated glowing tracing pen cursor
       ctx.beginPath();
-      ctx.arc(cursor.x, cursor.y, 7, 0, 2 * Math.PI);
+      ctx.arc(cursor.x, cursor.y, 8, 0, 2 * Math.PI);
       ctx.fillStyle = '#f59e0b';
       ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2.5;
       ctx.stroke();
 
       if (progress < 1) {
         demoAnimRef.current = requestAnimationFrame(drawFrame);
       } else {
-        drawDemoPattern(points); // freeze on the finished pattern with all vertex dots
         demoAnimRef.current = null;
       }
     };
@@ -642,348 +639,260 @@ const GestureDrawing = () => {
     demoAnimRef.current = requestAnimationFrame(drawFrame);
   }, []);
 
-  // Play (or replay) the demo animation whenever the "Watch Demo" overlay
-  // is dismissed, and clean up if the component unmounts mid-animation.
   useEffect(() => {
-    if (!showVideo && shapeVariation) {
-      animateDemoPattern(shapeVariation.points);
+    if (!showVideo && currentShape) {
+      animateDemoPattern(currentShape);
     }
     return () => {
       if (demoAnimRef.current) cancelAnimationFrame(demoAnimRef.current);
     };
-  }, [showVideo, shapeVariation, animateDemoPattern]);
+  }, [showVideo, currentShape, animateDemoPattern]);
 
-  // Draw user's hand tracking on canvas
-  const drawUserDrawing = useCallback(() => {
+  // ============================================================
+  // USER DRAWING CANVAS RENDERER (Clean & Unobstructed)
+  // ============================================================
+
+  const drawUserDrawing = useCallback((customPoints = null, cursor = null) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw grid
-    ctx.fillStyle = 'rgba(0,0,0,0.02)';
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.02)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Optional faint guide of the target outline, drawn right on the
-    // drawing canvas (as opposed to the separate demo panel) so it's easy
-    // to trace against without cross-referencing the other canvas.
-    if (showHint && shapeVariation) {
+    const waypoints = activeWaypointsRef.current || [];
+    const targetIdx = targetWaypointIdxRef.current || 0;
+    const px = (p) => p.x * canvas.width;
+    const py = (p) => p.y * canvas.height;
+
+    // Optional faint guide outline (User toggled)
+    if (showOutline && currentShape) {
+      const closed = [...currentShape.points, currentShape.points[0]];
       ctx.save();
-      ctx.globalAlpha = 0.16;
+      ctx.globalAlpha = 0.22;
       ctx.setLineDash([6, 6]);
       ctx.beginPath();
       ctx.strokeStyle = '#4f6df5';
       ctx.lineWidth = 2;
-      shapeVariation.points.forEach((p, i) => {
-        const x = p.x * canvas.width;
-        const y = p.y * canvas.height;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      closed.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(px(p), py(p));
+        else ctx.lineTo(px(p), py(p));
       });
-      ctx.closePath();
       ctx.stroke();
       ctx.restore();
     }
-    
-    // Draw user's drawing
-    if (userDrawing.length > 1) {
+
+    // Optional Checkpoint Numbers & Waypoint Badges (User toggled)
+    if (showNumbers && waypoints.length > 0) {
+      const passed = passedWaypointsRef.current || [];
+      waypoints.forEach((wp, i) => {
+        const isPassed = passed.includes(i);
+        const isCurrentTarget = i === targetIdx;
+        const isStart = i === 0;
+
+        ctx.save();
+
+        if (isCurrentTarget) {
+          const pulse = (Math.sin(Date.now() / 150) + 1) / 2;
+          ctx.beginPath();
+          ctx.arc(px(wp), py(wp), 14 + pulse * 6, 0, 2 * Math.PI);
+          ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(px(wp), py(wp), 11, 0, 2 * Math.PI);
+          ctx.fillStyle = '#f59e0b';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(i + 1), px(wp), py(wp));
+
+          ctx.fillStyle = '#f59e0b';
+          ctx.font = 'bold 11px sans-serif';
+          const label = isStart ? '1: START HERE' : `${i + 1}: ${wp.label}`;
+          ctx.fillText(label, px(wp), py(wp) - 18);
+        } else if (isPassed) {
+          ctx.beginPath();
+          ctx.arc(px(wp), py(wp), 8, 0, 2 * Math.PI);
+          ctx.fillStyle = '#10b981';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 9px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('✓', px(wp), py(wp));
+        } else {
+          ctx.beginPath();
+          ctx.arc(px(wp), py(wp), 7, 0, 2 * Math.PI);
+          ctx.fillStyle = 'rgba(100, 116, 139, 0.6)';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '9px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(i + 1), px(wp), py(wp));
+        }
+        ctx.restore();
+      });
+    }
+
+    // Optional Directional Guide Arrow (User toggled)
+    if (showArrows && targetIdx > 0 && targetIdx < waypoints.length) {
+      const prev = waypoints[targetIdx - 1];
+      const next = waypoints[targetIdx];
+      ctx.save();
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([4, 4]);
       ctx.beginPath();
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 3;
-      ctx.shadowColor = 'rgba(16, 185, 129, 0.3)';
-      ctx.shadowBlur = 8;
-      
-      userDrawing.forEach((p, i) => {
-        const x = p.x * canvas.width;
-        const y = p.y * canvas.height;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
+      ctx.moveTo(px(prev), py(prev));
+      ctx.lineTo(px(next), py(next));
       ctx.stroke();
-      
-      // Draw dots
-      userDrawing.forEach((p, i) => {
-        const x = p.x * canvas.width;
-        const y = p.y * canvas.height;
-        ctx.beginPath();
-        ctx.arc(x, y, 4, 0, 2 * Math.PI);
-        ctx.fillStyle = i === 0 ? '#f59e0b' : '#10b981';
+      ctx.restore();
+    }
+
+    // User's smooth vector stroke
+    const pts = customPoints !== null ? customPoints : userDrawingRef.current;
+    if (pts && pts.length > 0) {
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 4.5;
+      ctx.strokeStyle = '#10b981';
+      ctx.shadowColor = 'rgba(16, 185, 129, 0.6)';
+      ctx.shadowBlur = 8;
+
+      ctx.beginPath();
+      if (pts.length === 1) {
+        ctx.arc(px(pts[0]), py(pts[0]), 3, 0, 2 * Math.PI);
+        ctx.fillStyle = '#10b981';
         ctx.fill();
-      });
-    }
-    
-    // Draw accuracy overlay
-    if (accuracy > 0) {
-      ctx.fillStyle = `rgba(79, 109, 245, ${accuracy / 200})`;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }, [userDrawing, accuracy, showHint, shapeVariation]);
-
-  // Handle one webcam frame. This is a plain function (not memoized) so it
-  // always closes over the current render's state — it's invoked via
-  // tickRef, never called directly by an interval, so staleness isn't an issue.
-  const handleFrame = async () => {
-    if (!detectorModel || !isPlaying || !webcamRef.current) return;
-    // If the previous frame's inference hasn't resolved yet, skip this tick
-    // instead of stacking another call behind it — this was the main cause
-    // of the lag, since estimateHands can take longer than the tick interval.
-    if (isProcessingRef.current) return;
-    if (isComplete) return; // pause input during the brief success celebration
-
-    const video = webcamRef.current.video;
-    // videoWidth/videoHeight are 0 until the stream has real frames, and
-    // readyState 4 means "enough data to play" — both must hold.
-    if (!video || video.readyState !== 4 || !video.videoWidth) return;
-
-    isProcessingRef.current = true;
-    try {
-      // flipHorizontal matches the coordinates to the mirrored preview the
-      // user sees, so MIRROR_X below is now just a manual override switch.
-      const hands = await detectorModel.estimateHands(video, { flipHorizontal: MIRROR_X });
-      // A successful call means the model itself is responding — clear any
-      // previously-shown tracking-error message rather than leaving it stuck.
-      if (trackingErrorShownRef.current) {
-        trackingErrorShownRef.current = false;
-        setMessage('');
-      }
-
-      const rawHand = hands.length > 0 ? hands[0] : null;
-      // Some GPU/browser combinations have a documented issue where this
-      // model (MediaPipeHands via the 'tfjs' runtime on the WebGL backend)
-      // returns a "hand" whose score and/or keypoints are NaN instead of
-      // simply returning no hand — see tensorflow/tfjs#7204. NaN comparisons
-      // are always false, so a hand like this would otherwise fail every
-      // check below (confidence gate, bounds check, pinch distance) and
-      // look pixel-for-pixel identical to "no hand in frame", with nothing
-      // in the UI to tell the two apart.
-      const isFiniteHand = !!rawHand
-        && Number.isFinite(rawHand.score)
-        && Array.isArray(rawHand.keypoints)
-        && rawHand.keypoints.length === 21
-        && rawHand.keypoints.every(kp => Number.isFinite(kp.x) && Number.isFinite(kp.y));
-
-      if (rawHand && !isFiniteHand) {
-        nanStreakRef.current += 1;
-        console.warn(
-          'Hand detected but score/keypoints were non-finite; treating as no hand for this frame.',
-          rawHand
-        );
-        // One or two stray NaN frames is normal noise; a long unbroken
-        // streak means every frame is unusable, which points at the known
-        // GPU/WebGL compatibility issue rather than "no hand in view".
-        if (nanStreakRef.current === 20) {
-          setMessage('⚠️ Your browser/GPU appears to be returning invalid hand-tracking data. Try Chrome, or a different device — this is a known WebGL compatibility issue with this model.');
-        }
       } else {
-        nanStreakRef.current = 0;
+        ctx.moveTo(px(pts[0]), py(pts[0]));
+        for (let i = 1; i < pts.length - 1; i++) {
+          const xc = (pts[i].x + pts[i + 1].x) / 2 * canvas.width;
+          const yc = (pts[i].y + pts[i + 1].y) / 2 * canvas.height;
+          ctx.quadraticCurveTo(px(pts[i]), py(pts[i]), xc, yc);
+        }
+        const last = pts[pts.length - 1];
+        ctx.lineTo(px(last), py(last));
+        ctx.stroke();
       }
 
-      // Reject low-confidence detections outright — this is the single
-      // biggest lever for "poor tracking": a handful of noisy, half-guessed
-      // frames per second was what made the fingertip feel like it was
-      // teleporting around. Anything below MIN_HAND_CONFIDENCE is treated
-      // as "no hand" rather than plotted.
-      const hand = isFiniteHand && rawHand.score >= MIN_HAND_CONFIDENCE ? rawHand : null;
-      setHandConfidence(isFiniteHand ? Math.round(rawHand.score * 100) : 0);
+      ctx.beginPath();
+      ctx.arc(px(pts[0]), py(pts[0]), 5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fill();
 
-      if (hand) {
-        const keypoints = hand.keypoints; // [{x, y, name}, ...] in video pixel space, already mirror-flipped
-        const indexFinger = keypoints[8]; // Index finger tip
-        const thumbTip = keypoints[4]; // Thumb tip
+      const lastPoint = pts[pts.length - 1];
+      ctx.beginPath();
+      ctx.arc(px(lastPoint), py(lastPoint), 5.5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#10b981';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
 
-        drawHandSkeleton(keypoints, video.videoWidth, video.videoHeight);
-
-        // Normalize against the video's own pixel size (not the on-screen
-        // canvas's bounding box — those are unrelated coordinate systems).
-        let x = indexFinger.x / video.videoWidth;
-        let y = indexFinger.y / video.videoHeight;
-
-        // Smooth out frame-to-frame jitter with user-adjustable smoothing
-        const smoothing = sensitivitySettings.smoothing;
-        if (smoothPosRef.current) {
-          x = smoothPosRef.current.x * smoothing + x * (1 - smoothing);
-          y = smoothPosRef.current.y * smoothing + y * (1 - smoothing);
-        }
-        smoothPosRef.current = { x, y };
-        setFingerPos({ x, y });
-
-        // ===== MINIMUM MOVEMENT FILTER =====
-        // Skip tiny movements to ignore hand jitter
-        const minMove = sensitivitySettings.minMovement;
-        if (lastPosRef.current) {
-          const dx = x - lastPosRef.current.x;
-          const dy = y - lastPosRef.current.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < minMove) {
-            // Skip tiny movements - just update position without drawing
-            isProcessingRef.current = false;
-            return;
-          }
-        }
-        lastPosRef.current = { x, y };
-
-        // Pinch distance as a fraction of frame width
-        const dx = indexFinger.x - thumbTip.x;
-        const dy = indexFinger.y - thumbTip.y;
-        const pinchDistance = Math.sqrt(dx * dx + dy * dy) / video.videoWidth;
-        // Use user-adjusted pinch threshold
-        const currentPinchThreshold = sensitivitySettings.pinchThreshold;
-
-        if (x > 0 && x < 1 && y > 0 && y < 1) {
-          if (pinchDistance < currentPinchThreshold) {
-            setIsDrawing(true);
-
-            // AUTO-CORRECT: if the fingertip is reasonably close to the
-            // target outline, gently pull the plotted point onto the
-            // nearest spot on that outline instead of plotting it exactly
-            // where the (possibly shaky) hand was.
-            let plotted = { x, y };
-            if (shapeVariation) {
-              const closed = [...shapeVariation.points, shapeVariation.points[0]];
-              const { point: nearest, distance, segment, t } = closestPointOnShape({ x, y }, closed);
-              // Use user-adjusted snap radius and strength
-              const snapRadius = sensitivitySettings.snapRadius;
-              const snapStrength = sensitivitySettings.snapStrength;
-              if (distance < snapRadius) {
-                plotted = {
-                  x: x + (nearest.x - x) * snapStrength,
-                  y: y + (nearest.y - y) * snapStrength
-                };
-                // Track furthest point reached along the outline so far —
-                // this is the live "% traced correctly" the patient sees,
-                // and also what triggers auto-completion below.
-                const totalSegments = closed.length - 1;
-                const progress = (segment + t) / totalSegments;
-                if (progress > maxProgressRef.current) {
-                  maxProgressRef.current = progress;
-                  setAccuracy(Math.round(maxProgressRef.current * 100));
-                }
-              }
-            }
-
-            setUserDrawing(prev => {
-              const newPoints = [...prev, plotted];
-              return newPoints.length > 200 ? newPoints.slice(-200) : newPoints;
-            });
-
-            // AUTO-ANALYZE: once most of the outline has been traced well
-            // and the fingertip is back near the starting point, score the
-            // drawing automatically — the patient doesn't have to release
-            // the pinch at exactly the right instant.
-            if (shapeVariation && maxProgressRef.current >= 0.92 && userDrawing.length > 15) {
-              const distToStart = Math.hypot(x - shapeVariation.points[0].x, y - shapeVariation.points[0].y);
-              if (distToStart < 0.14) {
-                setIsDrawing(false);
-                checkDrawingMatch();
-              }
-            }
-          } else if (isDrawing) {
-            setIsDrawing(false);
-            // Check if drawing is complete
-            if (userDrawing.length > 10) {
-              checkDrawingMatch();
-            }
-          }
-        }
-      } else {
-        setFingerPos(null);
-        smoothPosRef.current = null;
-        lastPosRef.current = null;
-        const previewCanvas = previewCanvasRef.current;
-        if (previewCanvas) previewCanvas.getContext('2d').clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-      }
-    } catch (error) {
-      console.error('Hand tracking error:', error);
-      setHandConfidence(0);
-      // Without this, a persistently-throwing estimateHands() call is
-      // indistinguishable from "no hand in view" — nothing in the UI would
-      // ever tell you tracking is actually broken vs. your hand being
-      // out of frame.
-      if (!trackingErrorShownRef.current) {
-        trackingErrorShownRef.current = true;
-        setMessage(`⚠️ Hand-tracking error: ${error?.message || 'unknown error'} (see browser console for details)`);
-      }
-    } finally {
-      isProcessingRef.current = false;
+      ctx.restore();
     }
-  };
 
-  // Keep tickRef pointed at the freshest handleFrame every render.
-  useEffect(() => {
-    tickRef.current = handleFrame;
-  });
-
-  // A single, never-restarted requestAnimationFrame loop drives tracking.
-  // (The old version used setInterval with handleFrame/drawUserDrawing in
-  // its dependency array, which tore the interval down and rebuilt it on
-  // almost every frame while drawing — via tickRef we get fresh state
-  // without that churn.)
-  useEffect(() => {
-    let rafId;
-    let lastRun = 0;
-    const loop = (time) => {
-      if (time - lastRun >= 70) { // try more often; isProcessingRef still prevents pile-up if inference is slower than this
-        tickRef.current();
-        lastRun = time;
+    // Real-time Pen / Reticle indicator on Drawing Canvas
+    if (cursor && cursor.x > 0 && cursor.x < 1 && cursor.y > 0 && cursor.y < 1) {
+      const cx = cursor.x * canvas.width;
+      const cy = cursor.y * canvas.height;
+      ctx.save();
+      if (cursor.isPinching) {
+        // Glowing drawing pen tip
+        ctx.beginPath();
+        ctx.arc(cx, cy, 7, 0, 2 * Math.PI);
+        ctx.fillStyle = '#10b981';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.shadowColor = '#10b981';
+        ctx.shadowBlur = 10;
+      } else {
+        // Hover reticle when open hand (accurate alignment)
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, 2, 0, 2 * Math.PI);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fill();
       }
-      rafId = requestAnimationFrame(loop);
-    };
-    rafId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafId);
-  }, []);
+      ctx.restore();
+    }
+  }, [showOutline, showNumbers, showArrows, currentShape]);
 
-  // Redraw the canvas whenever the user's stroke or accuracy overlay changes.
-  useEffect(() => {
-    drawUserDrawing();
-  }, [userDrawing, accuracy, drawUserDrawing]);
+  // ============================================================
+  // EVALUATE FULL SHAPE COMPLETION & RANDOM REWARDS
+  // ============================================================
 
-  // Check if drawing matches the target shape
-  const checkDrawingMatch = useCallback(() => {
-    if (!shapeVariation || userDrawing.length < 10) {
-      setMessage('✋ Draw more! Keep going...');
+  const evaluateShapeCompletion = useCallback(() => {
+    const pts = userDrawingRef.current.length > 0 ? userDrawingRef.current : userDrawing;
+    if (!currentShape || pts.length < 10) {
+      setMessage('✋ Trace the complete shape through all waypoints!');
       return;
     }
 
-    const target = shapeVariation.points;
-    const closed = [...target, target[0]];
+    const closed = [...currentShape.points, currentShape.points[0]];
 
-    // Robust, path-based accuracy: average distance from each drawn point
-    // to the nearest point anywhere on the target outline. Unlike pairing
-    // drawn points to target points by index, this doesn't punish the
-    // patient for drawing at a different speed or with a different number
-    // of points than the reference shape happens to have.
-    let totalDistance = 0;
-    userDrawing.forEach(p => {
+    let totalDist = 0;
+    pts.forEach(p => {
       const { distance } = closestPointOnShape(p, closed);
-      totalDistance += distance;
+      totalDist += distance;
     });
-    const avgDistance = totalDistance / userDrawing.length;
-    const shapeAccuracy = Math.max(0, Math.min(100, 100 - avgDistance * 300));
+    const avgDist = totalDist / pts.length;
 
-    // Blend in how much of the outline was actually covered, so tracing
-    // only a small correct-looking arc doesn't score as a finished shape.
-    const coverage = Math.min(1, maxProgressRef.current);
-    const accuracyScore = shapeAccuracy * (0.5 + 0.5 * coverage);
-    setAccuracy(accuracyScore);
-    
-    // Check if accuracy is high enough. Was >50 — combined with the old,
-    // wider SNAP_RADIUS that pulled loose points onto the outline before
-    // this check ever ran, that threshold made almost any rough stroke
-    // pass. Now that snapping is tighter (so avgDistance actually
-    // reflects how close the real drawing was), 65% is the real bar.
-    if (accuracyScore > 65) {
-      // Success!
-      setMatchedVariation(shapeVariation);
-      setMessage(`✅ Perfect! ${shapeName} drawn correctly! (${Math.round(accuracyScore)}%)`);
+    const shapeAccuracy = Math.max(0, Math.min(100, 100 - avgDist * 280));
+    const finalScore = Math.round(shapeAccuracy);
+    setAccuracy(finalScore);
+
+    if (finalScore >= 65) {
       if (soundEnabledRef.current) playSuccessSound();
       triggerConfetti();
 
-      // Speed bonus rewards a clean, efficient trace (fewer plotted points
-      // for the same accuracy generally means a more confident gesture).
-      const speedBonus = userDrawing.length < 45 ? 10 : 0;
-      const pointsEarned = 20 * level + speedBonus;
+      // Enhanced Random Points & Coins System!
+      const speedBonus = pts.length < 50 ? 20 : 5;
+      const basePoints = 30 * level + speedBonus;
+      // 50% chance of random mystery points bonus (+15 to +40 points)
+      const randomBonusPoints = Math.random() < 0.5 ? Math.floor(15 + Math.random() * 26) : 0;
+      const totalPointsEarned = basePoints + randomBonusPoints;
+
+      // Random coins bonus: Base coins + random chance of mystery drop
+      let coinsEarned = Math.floor(finalScore / 18) + 2;
+      if (Math.random() < 0.5) {
+        coinsEarned += Math.floor(2 + Math.random() * 4); // +2 to +5 extra coins
+      }
+      let mysteryChest = false;
+      if (Math.random() < 0.15) {
+        coinsEarned += 15; // Lucky Chest
+        mysteryChest = true;
+      }
+
       setScore(prev => {
-        const next = prev + pointsEarned;
+        const next = prev + totalPointsEarned;
         setHighScore(hs => {
           if (next > hs) {
             setIsNewHighScore(true);
@@ -995,9 +904,8 @@ const GestureDrawing = () => {
         });
         return next;
       });
-      setCoins(prev => prev + Math.floor(accuracyScore / 20));
 
-      // Streak of consecutive successful shapes
+      setCoins(prev => prev + coinsEarned);
       setStreak(prev => {
         const next = prev + 1;
         setBestStreak(b => {
@@ -1009,73 +917,383 @@ const GestureDrawing = () => {
         });
         return next;
       });
-      
-      // Level up
-      const newLevel = level + 1;
-      setLevel(newLevel);
-      
-      // Checkpoint every 5 levels
-      if (newLevel % 5 === 0) {
-        setLives(prev => Math.min(prev + 1, 5));
-        setMessage(`🚩 Checkpoint! +1 Life!`);
+
+      const nextLevel = level + 1;
+      setLevel(nextLevel);
+
+      // Checkpoint every 3 levels!
+      const earnedBonusCoins = nextLevel % 3 === 0 ? 25 : coinsEarned;
+      const nextCp = nextLevel % 3 === 0 ? nextLevel : checkpointLevel;
+      const newCoinsTotal = coins + earnedBonusCoins;
+
+      if (nextLevel % 3 === 0) {
+        setCheckpointLevel(nextLevel);
+        setLives(l => Math.min(l + 1, 5));
+        setCoins(newCoinsTotal);
+        setMessage(`🚩 Checkpoint Level ${nextLevel} Saved! +1 Life & +25 Coins Awarded!`);
+      } else {
+        setCoins(newCoinsTotal);
+        setMessage(
+          `✅ Perfect! ${currentShape.name} cleared (${finalScore}%)! +${totalPointsEarned} pts, +${coinsEarned} 🪙${mysteryChest ? ' 🎁 LUCKY CHEST!' : ''}`
+        );
       }
-      
+      persistStats(newCoinsTotal, score + totalPointsEarned, nextLevel, nextCp);
+
       setIsComplete(true);
       setTimeout(() => {
         setIsComplete(false);
         setIsNewHighScore(false);
-        generateNewShape();
-      }, 3000);
+        generateNewShape(nextLevel);
+      }, 2600);
     } else {
-      setMessage(`❌ Try again! Accuracy: ${Math.round(accuracyScore)}%. Need 65%+`);
+      setMessage(`❌ Inaccurate! Accuracy: ${finalScore}%. Need 65%+ to clear.`);
       if (soundEnabledRef.current) playFailSound();
       setStreak(0);
-      // Lose a life for poor attempt
       setLives(prev => {
-        const newLives = prev - 1;
-        if (newLives === 0) {
-          setIsGameOver(true);
-        }
-        return newLives;
+        const next = prev - 1;
+        if (next <= 0) setIsGameOver(true);
+        return next;
       });
-      // Clean slate for the retry, rather than continuing to append to the
-      // same (already scored) trace.
+      userDrawingRef.current = [];
       setUserDrawing([]);
-      maxProgressRef.current = 0;
-      lastPosRef.current = null;
+      filterXRef.current.reset();
+      filterYRef.current.reset();
+      setTargetWaypointIdx(0);
+      setPassedWaypoints([]);
+      targetWaypointIdxRef.current = 0;
+      passedWaypointsRef.current = [];
+      drawUserDrawing([], null);
     }
-  }, [shapeVariation, userDrawing, level, shapeName, generateNewShape, triggerConfetti]);
+  }, [currentShape, userDrawing, level, generateNewShape, triggerConfetti, drawUserDrawing]);
 
-  // Reset game
+  // ============================================================
+  // FRAME PROCESSING LOOP (Smooth 1mm tracking, zero lag)
+  // ============================================================
+
+  const handleFrame = async () => {
+    if (!detectorModel || !isPlaying || !webcamRef.current) return;
+    if (isProcessingRef.current) return;
+    if (isComplete) return;
+
+    const video = webcamRef.current.video;
+    if (!video || video.readyState !== 4 || !video.videoWidth) return;
+
+    isProcessingRef.current = true;
+    try {
+      const hands = await detectorModel.estimateHands(video, { flipHorizontal: true });
+      const rawHand = hands.length > 0 ? hands[0] : null;
+
+      const isFiniteHand = !!rawHand &&
+        Number.isFinite(rawHand.score) &&
+        Array.isArray(rawHand.keypoints) &&
+        rawHand.keypoints.length === 21 &&
+        rawHand.keypoints.every(kp => Number.isFinite(kp.x) && Number.isFinite(kp.y));
+
+      const minConfidence = hadHandRef.current ? 0.35 : 0.45;
+      const hand = isFiniteHand && rawHand.score >= minConfidence ? rawHand : null;
+
+      // Throttle confidence update to eliminate unnecessary React re-renders
+      const now = performance.now();
+      if (now - lastConfidenceUpdateRef.current > 250) {
+        lastConfidenceUpdateRef.current = now;
+        setHandConfidence(isFiniteHand ? Math.round(rawHand.score * 100) : 0);
+      }
+
+      if (hand) {
+        hadHandRef.current = true;
+        const keypoints = hand.keypoints;
+        const indexFinger = keypoints[8];
+        const thumbTip = keypoints[4];
+        const pWrist = keypoints[0];
+        const pMiddleKnuckle = keypoints[9];
+
+        // Calibrated Pinch Detection (Scale-invariant palm ratio + frame distance)
+        const dx = indexFinger.x - thumbTip.x;
+        const dy = indexFinger.y - thumbTip.y;
+        const pinchPixelDist = Math.hypot(dx, dy);
+        const pinchFrameDist = pinchPixelDist / video.videoWidth;
+
+        const palmScale = Math.hypot(pMiddleKnuckle.x - pWrist.x, pMiddleKnuckle.y - pWrist.y) || 120;
+        const pinchRatio = pinchPixelDist / palmScale;
+
+        const currentPinchThreshold = sensitivitySettingsRef.current.pinchThreshold || 0.075;
+        const currentRatioThreshold = sensitivitySettingsRef.current.pinchRatioThreshold || 0.42;
+
+        const frameReleaseThreshold = currentPinchThreshold + 0.020;
+        const ratioReleaseThreshold = currentRatioThreshold + 0.10;
+
+        let isPinchNow = false;
+        if (isDrawingRef.current && drawModeRef.current === 'pinch') {
+          isPinchNow = (pinchFrameDist < frameReleaseThreshold) || (pinchRatio < ratioReleaseThreshold);
+        } else {
+          isPinchNow = (pinchFrameDist < currentPinchThreshold) || (pinchRatio < currentRatioThreshold);
+        }
+
+        if (!isPinchNow && isDrawingRef.current && drawModeRef.current === 'pinch') {
+          unpinchDebounceRef.current += 1;
+          if (unpinchDebounceRef.current < 3) {
+            isPinchNow = true;
+          }
+        } else if (isPinchNow) {
+          unpinchDebounceRef.current = 0;
+        }
+
+        // Active drawing check:
+        // In 'point' mode: direct index finger air-drawing (no pinch required!)
+        // In 'pinch' mode: touch thumb and index finger together to draw
+        const isActivelyDrawing = drawModeRef.current === 'point' ? true : isPinchNow;
+
+        // When pinching, tracking the midpoint between thumb and index tip eliminates contact flex tremor!
+        const rawTargetX = (isPinchNow && drawModeRef.current === 'pinch')
+          ? (indexFinger.x + thumbTip.x) / 2
+          : indexFinger.x;
+        const rawTargetY = (isPinchNow && drawModeRef.current === 'pinch')
+          ? (indexFinger.y + thumbTip.y) / 2
+          : indexFinger.y;
+
+        // 1-Euro Adaptive Filter: smooth pixel-space filtering (Eradicates shiver & lag)
+        const smoothPixelX = filterXRef.current.filter(rawTargetX, now);
+        const smoothPixelY = filterYRef.current.filter(rawTargetY, now);
+        const x = smoothPixelX / video.videoWidth;
+        const y = smoothPixelY / video.videoHeight;
+        smoothPosRef.current = { x, y };
+
+        // Zero-overhead direct DOM update for camera guide cursor
+        if (fingerCursorRef.current) {
+          fingerCursorRef.current.style.display = 'block';
+          fingerCursorRef.current.style.left = `${x * 100}%`;
+          fingerCursorRef.current.style.top = `${y * 100}%`;
+        }
+
+        // Only trigger React state change when drawing state actually flips
+        if (isActivelyDrawing !== isPinchingRef.current) {
+          isPinchingRef.current = isActivelyDrawing;
+          setIsPinchingFingers(isActivelyDrawing);
+          if (fingerCursorRef.current) {
+            fingerCursorRef.current.className = `absolute w-3.5 h-3.5 rounded-full border-2 border-white -translate-x-1/2 -translate-y-1/2 pointer-events-none ${
+              isActivelyDrawing ? 'bg-emerald-400 shadow-[0_0_8px_#10b981]' : 'bg-amber-400 shadow-[0_0_8px_#f59e0b]'
+            }`;
+          }
+        }
+
+        // Render dedicated Camera preview (ONLY START POINT, no outline)
+        drawCameraPreview(
+          keypoints,
+          video.videoWidth,
+          video.videoHeight,
+          isActivelyDrawing,
+          targetWaypointIdxRef.current,
+          activeWaypointsRef.current
+        );
+
+        if (x > 0 && x < 1 && y > 0 && y < 1) {
+          if (isActivelyDrawing) {
+            if (!isDrawingRef.current) {
+              setIsDrawing(true);
+              isDrawingRef.current = true;
+            }
+
+            let plotted = { x, y };
+            if (currentShape && sensitivitySettingsRef.current.snapStrength > 0) {
+              const closed = [...currentShape.points, currentShape.points[0]];
+              const { point: nearest, distance } = closestPointOnShape({ x, y }, closed);
+              const snapRadius = sensitivitySettingsRef.current.snapRadius;
+              const snapStrength = sensitivitySettingsRef.current.snapStrength;
+              if (distance < snapRadius) {
+                // Smooth continuous quadratic falloff: 0 at boundary, completely eliminates jumping and zigzag!
+                const t = 1 - (distance / snapRadius);
+                const smoothFactor = snapStrength * t * t;
+                plotted = {
+                  x: x + (nearest.x - x) * smoothFactor,
+                  y: y + (nearest.y - y) * smoothFactor
+                };
+              }
+            }
+
+            // High-precision distance sampling:
+            // 0.009 (~4.5px) spaces control points cleanly, eliminating micro-tremor zigzag loops!
+            const pts = userDrawingRef.current;
+            let shouldAdd = false;
+            if (pts.length === 0) {
+              shouldAdd = true;
+            } else {
+              const lastPt = pts[pts.length - 1];
+              const dist = Math.hypot(plotted.x - lastPt.x, plotted.y - lastPt.y);
+              if (dist >= 0.009) {
+                shouldAdd = true;
+              }
+            }
+
+            if (shouldAdd) {
+              pts.push(plotted);
+            }
+
+            // Check waypoint progression
+            const waypoints = activeWaypointsRef.current;
+            const currentIdx = targetWaypointIdxRef.current;
+
+            if (waypoints.length > 0 && currentIdx < waypoints.length) {
+              const targetWp = waypoints[currentIdx];
+              const distToWp = Math.hypot(x - targetWp.x, y - targetWp.y);
+
+              const hitTolerance = currentIdx === 0 ? 0.14 : 0.11;
+              if (distToWp < hitTolerance) {
+                const newPassed = [...passedWaypointsRef.current, currentIdx];
+                passedWaypointsRef.current = newPassed;
+                setPassedWaypoints(newPassed);
+
+                if (currentIdx === 0) {
+                  if (soundEnabledRef.current) playStartSound();
+                } else {
+                  if (soundEnabledRef.current) playWaypointSound(currentIdx);
+                }
+
+                const nextIdx = currentIdx + 1;
+                targetWaypointIdxRef.current = nextIdx;
+                setTargetWaypointIdx(nextIdx);
+
+                if (nextIdx < waypoints.length) {
+                  const nextTarget = waypoints[nextIdx];
+                  setStepGuidance(`Step ${nextIdx} of ${waypoints.length - 1}: Draw to ${nextTarget.label}`);
+                } else {
+                  setStepGuidance('🎉 All waypoints traced! Evaluating drawing...');
+                  setIsDrawing(false);
+                  isDrawingRef.current = false;
+                  setTimeout(() => {
+                    evaluateShapeCompletion();
+                  }, 200);
+                }
+              }
+            }
+          } else if (isDrawingRef.current) {
+            setIsDrawing(false);
+            isDrawingRef.current = false;
+            unpinchDebounceRef.current = 0;
+            setUserDrawing([...userDrawingRef.current]);
+
+            const waypoints = activeWaypointsRef.current;
+            const currentIdx = targetWaypointIdxRef.current;
+
+            if (currentIdx < waypoints.length && userDrawingRef.current.length > 15) {
+              setMessage(`⚠️ Keep going! Reached step ${currentIdx} of ${waypoints.length - 1}. Keep drawing!`);
+            }
+          }
+
+          // Direct 60 FPS drawing canvas render with zero React re-render overhead
+          drawUserDrawing(userDrawingRef.current, { x, y, isPinching: isActivelyDrawing });
+        }
+      } else {
+        hadHandRef.current = false;
+        filterXRef.current.reset();
+        filterYRef.current.reset();
+        if (fingerCursorRef.current) {
+          fingerCursorRef.current.style.display = 'none';
+        }
+        if (isPinchingRef.current) {
+          isPinchingRef.current = false;
+          setIsPinchingFingers(false);
+        }
+        if (isDrawingRef.current) {
+          isDrawingRef.current = false;
+          setIsDrawing(false);
+          setUserDrawing([...userDrawingRef.current]);
+        }
+        smoothPosRef.current = null;
+        drawCameraPreview(
+          null,
+          640,
+          480,
+          false,
+          targetWaypointIdxRef.current,
+          activeWaypointsRef.current
+        );
+        drawUserDrawing(userDrawingRef.current, null);
+      }
+    } catch (err) {
+      console.error('Hand tracking loop error:', err);
+    } finally {
+      isProcessingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    tickRef.current = handleFrame;
+  });
+
+  useEffect(() => {
+    let rafId;
+    const loop = () => {
+      tickRef.current();
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  useEffect(() => {
+    drawUserDrawing(userDrawingRef.current, null);
+  }, [drawUserDrawing, userDrawing]);
+
+  // Buy Extra Life with Coins anytime
+  const buyExtraLife = () => {
+    if (lives >= 5) {
+      setMessage('❤️ Full lives already! (Maximum 5)');
+      return;
+    }
+    if (coins < 10) {
+      setMessage('🪙 Need 10 coins to buy an extra life! Keep drawing to earn coins.');
+      return;
+    }
+    const newCoins = coins - 10;
+    const newLives = Math.min(lives + 1, 5);
+    setCoins(newCoins);
+    setLives(newLives);
+    persistStats(newCoins, score, level, checkpointLevel, newLives);
+    playTone(600, 150, 'sine');
+    setMessage('💚 Extra life purchased (+1 ❤️)!');
+  };
+
+  // Restart / Reset
   const resetGame = () => {
     setScore(0);
     setLevel(1);
+    setCheckpointLevel(1);
     setLives(3);
-    setCoins(0);
+    setCoins(15);
     setStreak(0);
+    userDrawingRef.current = [];
     setUserDrawing([]);
     setIsGameOver(false);
     setIsComplete(false);
     setAccuracy(0);
     setMessage('');
-    lastPosRef.current = null;
     smoothPosRef.current = null;
-    generateNewShape();
+    filterXRef.current.reset();
+    filterYRef.current.reset();
+    if (fingerCursorRef.current) {
+      fingerCursorRef.current.style.display = 'none';
+    }
+    generateNewShape(1);
   };
 
-  const CONTINUE_COST = 15; // coins
-
-  // Spend coins to continue instead of starting over from level 1.
   const continueFromCheckpoint = () => {
-    if (coins < CONTINUE_COST) return;
-    setCoins(prev => prev - CONTINUE_COST);
-    setLives(1);
+    if (coins < 15) return;
+    const newCoins = coins - 15;
+    setCoins(newCoins);
+    setLives(3); // Restore 3 lives!
+    setLevel(checkpointLevel);
     setIsGameOver(false);
+    userDrawingRef.current = [];
     setUserDrawing([]);
-    setMessage('');
-    lastPosRef.current = null;
+    persistStats(newCoins, score, checkpointLevel, checkpointLevel, 3);
+    setMessage(`🚩 Resumed from Checkpoint Level ${checkpointLevel} with 3 lives!`);
     smoothPosRef.current = null;
-    generateNewShape();
+    filterXRef.current.reset();
+    filterYRef.current.reset();
+    if (fingerCursorRef.current) {
+      fingerCursorRef.current.style.display = 'none';
+    }
+    generateNewShape(checkpointLevel);
   };
 
   // Sensitivity Settings Modal
@@ -1085,7 +1303,7 @@ const GestureDrawing = () => {
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center">
             <Sliders className="w-6 h-6 mr-2 text-primary-500" />
-            Sensitivity Settings
+            Tracking & Sensitivity
           </h2>
           <button
             onClick={() => setShowSettings(false)}
@@ -1096,70 +1314,19 @@ const GestureDrawing = () => {
         </div>
 
         <div className="space-y-6">
-          {/* Smoothing */}
-          <div>
-            <div className="flex justify-between">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Smoothing
-              </label>
-              <span className="text-sm text-primary-600 dark:text-primary-400">
-                {Math.round(sensitivitySettings.smoothing * 100)}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min="0.3"
-              max="0.95"
-              step="0.05"
-              value={sensitivitySettings.smoothing}
-              onChange={(e) => setSensitivitySettings(prev => ({ 
-                ...prev, 
-                smoothing: parseFloat(e.target.value) 
-              }))}
-              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">Higher = smoother lines, Lower = more responsive</p>
-          </div>
-
-          {/* Minimum Movement */}
-          <div>
-            <div className="flex justify-between">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Ignore Small Movements
-              </label>
-              <span className="text-sm text-primary-600 dark:text-primary-400">
-                {Math.round(sensitivitySettings.minMovement * 1000)}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min="0.002"
-              max="0.025"
-              step="0.001"
-              value={sensitivitySettings.minMovement}
-              onChange={(e) => setSensitivitySettings(prev => ({ 
-                ...prev, 
-                minMovement: parseFloat(e.target.value) 
-              }))}
-              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">Higher = ignores hand tremors, Lower = more sensitive</p>
-          </div>
-
-          {/* Pinch Threshold */}
           <div>
             <div className="flex justify-between">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Pinch Sensitivity
               </label>
-              <span className="text-sm text-primary-600 dark:text-primary-400">
-                {Math.round(sensitivitySettings.pinchThreshold * 100)}%
+              <span className="text-sm text-primary-600 dark:text-primary-400 font-bold">
+                {Math.round(sensitivitySettings.pinchThreshold * 1000) / 10}%
               </span>
             </div>
             <input
               type="range"
-              min="0.03"
-              max="0.15"
+              min="0.040"
+              max="0.120"
               step="0.005"
               value={sensitivitySettings.pinchThreshold}
               onChange={(e) => setSensitivitySettings(prev => ({ 
@@ -1168,23 +1335,22 @@ const GestureDrawing = () => {
               }))}
               className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-500"
             />
-            <p className="text-xs text-gray-500 mt-1">Higher = easier to draw, Lower = harder to trigger</p>
+            <p className="text-xs text-gray-500 mt-1">Lower = strict physical finger touch; Higher = easier pinch to draw</p>
           </div>
 
-          {/* Snap Strength */}
           <div>
             <div className="flex justify-between">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Auto-Correction
+                Auto-Assist Snapping
               </label>
-              <span className="text-sm text-primary-600 dark:text-primary-400">
+              <span className="text-sm text-primary-600 dark:text-primary-400 font-bold">
                 {Math.round(sensitivitySettings.snapStrength * 100)}%
               </span>
             </div>
             <input
               type="range"
               min="0"
-              max="0.9"
+              max="0.6"
               step="0.05"
               value={sensitivitySettings.snapStrength}
               onChange={(e) => setSensitivitySettings(prev => ({ 
@@ -1193,43 +1359,18 @@ const GestureDrawing = () => {
               }))}
               className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-500"
             />
-            <p className="text-xs text-gray-500 mt-1">Higher = snaps to shape, Lower = follows your hand</p>
-          </div>
-
-          {/* Snap Radius */}
-          <div>
-            <div className="flex justify-between">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Snap Distance
-              </label>
-              <span className="text-sm text-primary-600 dark:text-primary-400">
-                {Math.round(sensitivitySettings.snapRadius * 100)}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min="0.02"
-              max="0.15"
-              step="0.005"
-              value={sensitivitySettings.snapRadius}
-              onChange={(e) => setSensitivitySettings(prev => ({ 
-                ...prev, 
-                snapRadius: parseFloat(e.target.value) 
-              }))}
-              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">How close your hand needs to be to the shape for correction</p>
+            <p className="text-xs text-gray-500 mt-1">Subtle outline guidance assist while drawing</p>
           </div>
 
           <div className="flex gap-3 mt-4">
             <button
               onClick={() => {
                 setSensitivitySettings({
-                  smoothing: SMOOTHING,
-                  minMovement: 0.008,
-                  pinchThreshold: DEFAULT_PINCH_THRESHOLD,
-                  snapStrength: SNAP_STRENGTH,
-                  snapRadius: SNAP_RADIUS,
+                  smoothing: 0.5,
+                  pinchThreshold: 0.075,
+                  pinchRatioThreshold: 0.42,
+                  snapStrength: 0.0,
+                  snapRadius: 0.055,
                 });
               }}
               className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg font-medium transition-colors"
@@ -1248,7 +1389,7 @@ const GestureDrawing = () => {
     </div>
   );
 
-  // Render tutorial
+  // Tutorial Screen
   if (showTutorial) {
     return (
       <div className="space-y-6">
@@ -1264,17 +1405,21 @@ const GestureDrawing = () => {
           <div className="text-center mb-8">
             <div className="text-6xl mb-4">✋</div>
             <h1 className="text-4xl font-bold bg-gradient-to-r from-primary-500 to-indigo-500 bg-clip-text text-transparent">
-              Gesture Drawing
+              Precision Gesture Drawing
             </h1>
-            <p className="mt-2 text-gray-600 dark:text-gray-300">Draw shapes with your finger using hand gestures!</p>
+            <p className="mt-2 text-gray-600 dark:text-gray-300">
+              Over 120+ unique shapes! Shapes get progressively more challenging as you level up.
+            </p>
           </div>
           
           <div className="space-y-4 mb-8">
             <div className="flex items-start space-x-3 p-4 bg-primary-50 dark:bg-primary-900/20 rounded-xl">
-              <span className="text-2xl">👆</span>
+              <span className="text-2xl">📹</span>
               <div>
-                <h3 className="font-bold">Step 1: Watch the Demo</h3>
-                <p className="text-gray-600 dark:text-gray-300">A video will show you how to draw the shape</p>
+                <h3 className="font-bold">Step 1: Check Camera for the START Beacon</h3>
+                <p className="text-gray-600 dark:text-gray-300">
+                  Look at the camera box on the right. Move your hand until your finger aligns with the green 🟢 START circle.
+                </p>
               </div>
             </div>
             
@@ -1282,35 +1427,28 @@ const GestureDrawing = () => {
               <span className="text-2xl">🤏</span>
               <div>
                 <h3 className="font-bold">Step 2: Pinch to Draw</h3>
-                <p className="text-gray-600 dark:text-gray-300">Touch your thumb and index finger together to start drawing</p>
+                <p className="text-gray-600 dark:text-gray-300">
+                  Pinch thumb and index fingertip together. Your full drawing canvas is 100% unobstructed!
+                </p>
               </div>
             </div>
             
             <div className="flex items-start space-x-3 p-4 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl">
-              <span className="text-2xl">✅</span>
+              <span className="text-2xl">🎯</span>
               <div>
-                <h3 className="font-bold">Step 3: Release to Check</h3>
-                <p className="text-gray-600 dark:text-gray-300">Release your fingers to check if your drawing matches</p>
+                <h3 className="font-bold">Step 3: Follow Numbered Checkpoints in Sequence</h3>
+                <p className="text-gray-600 dark:text-gray-300">
+                  Follow the exact sequence shown in the demo. You can toggle outlines and numbers on/off anytime!
+                </p>
               </div>
             </div>
             
             <div className="flex items-start space-x-3 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl">
-              <span className="text-2xl">💡</span>
+              <span className="text-2xl">🚩</span>
               <div>
-                <h3 className="font-bold">Shapes & Variations</h3>
+                <h3 className="font-bold">Step 4: Checkpoints & Extra Lives</h3>
                 <p className="text-gray-600 dark:text-gray-300">
-                  Each shape has multiple variations - watch carefully and draw the exact pattern shown!
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start space-x-3 p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl">
-              <Sparkles className="w-6 h-6 text-indigo-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-bold">Smarter, More Accurate Tracking</h3>
-                <p className="text-gray-600 dark:text-gray-300">
-                  Upgraded to a more accurate AI hand-tracking model with confidence checking, live skeleton
-                  feedback, streaks, a high score, sound, and an optional hint outline you can toggle in-game.
+                  Checkpoints save every 3 levels with bonus coins & lives. Use earned coins to buy extra lives anytime!
                 </p>
               </div>
             </div>
@@ -1322,7 +1460,7 @@ const GestureDrawing = () => {
               className="flex-1 px-6 py-4 bg-gradient-to-r from-primary-500 to-indigo-500 text-white rounded-xl font-bold hover:shadow-lg transition-all"
             >
               <Play className="w-5 h-5 inline mr-2" />
-              Start Playing
+              Start Game
             </button>
           </div>
         </div>
@@ -1349,23 +1487,23 @@ const GestureDrawing = () => {
           <p className="text-xl mb-2">Level Reached: {level}</p>
           <p className="text-xl mb-2">Coins Earned: {coins} 🪙</p>
           <p className="text-lg mb-6 text-gray-500">
-            <Trophy className="w-4 h-4 inline mr-1 text-amber-500" /> Best Score: {highScore} &nbsp;•&nbsp; 🔥 Best Streak: {bestStreak}
+            <Trophy className="w-4 h-4 inline mr-1 text-amber-500" /> Best Score: {highScore} &nbsp;•&nbsp; 🔥 Best Streak: {bestStreak} &nbsp;•&nbsp; 🚩 Checkpoint: Lvl {checkpointLevel}
           </p>
           
           <div className="flex flex-col gap-3">
-            {coins >= CONTINUE_COST && (
+            {checkpointLevel > 1 && coins >= 15 && (
               <button
                 onClick={continueFromCheckpoint}
-                className="px-8 py-3 bg-emerald-500 text-white rounded-lg font-bold hover:bg-emerald-600 transition-all"
+                className="px-8 py-3.5 bg-emerald-500 text-white rounded-xl font-bold hover:bg-emerald-600 transition-all shadow-md"
               >
-                ⚡ Continue for {CONTINUE_COST} 🪙 (1 life)
+                🚩 Continue from Checkpoint (Level {checkpointLevel}) with 3 ❤️ (15 🪙)
               </button>
             )}
             <button
               onClick={resetGame}
-              className="px-8 py-3 bg-gradient-to-r from-primary-500 to-indigo-500 text-white rounded-lg font-bold hover:shadow-lg transition-all"
+              className="px-8 py-3.5 bg-gradient-to-r from-primary-500 to-indigo-500 text-white rounded-xl font-bold hover:shadow-lg transition-all"
             >
-              🔁 Start Over
+              🔁 Start from Level 1
             </button>
           </div>
         </div>
@@ -1373,11 +1511,10 @@ const GestureDrawing = () => {
     );
   }
 
-  // Main Game
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* Top Header with Score, Level, Lives, Coins, and Buy Life Button */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <button 
           onClick={() => navigate('/games')}
           className="inline-flex items-center px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-colors"
@@ -1386,16 +1523,35 @@ const GestureDrawing = () => {
           Back to Games
         </button>
         
-        <div className="flex items-center space-x-4 flex-wrap gap-y-1">
-          <span className="text-lg font-bold text-primary-600">⭐ Score: {score}</span>
-          <span className="text-lg font-bold text-purple-600">📊 Level: {level}</span>
-          <span className="text-lg font-bold text-red-500">❤️ {lives}</span>
+        <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+          <span className="text-lg font-bold text-primary-600">⭐ {score}</span>
+          <span className="text-lg font-bold text-purple-600">📊 Lvl {level}</span>
+          <span className="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
+            🚩 CP: Lvl {checkpointLevel}
+          </span>
+          <span className="text-lg font-bold text-red-500 flex items-center gap-0.5">
+            ❤️ {lives}
+          </span>
+          {/* Enhanced Buy Extra Life Button */}
+          <button
+            onClick={buyExtraLife}
+            disabled={lives >= 5 || coins < 10}
+            className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 transition-all ${
+              lives >= 5 
+                ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-default'
+                : coins >= 10
+                  ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow hover:scale-105'
+                  : 'bg-gray-200 dark:bg-gray-700 text-gray-500 cursor-not-allowed'
+            }`}
+            title="Buy extra life for 10 coins"
+          >
+            <PlusCircle className="w-3.5 h-3.5" /> +1 ❤️ (10 🪙)
+          </button>
           <span className="text-lg font-bold text-yellow-500">🪙 {coins}</span>
           {streak > 1 && <span className="text-lg font-bold text-orange-500">🔥 {streak}</span>}
           <span className="text-sm font-semibold text-gray-400" title="Best score">
             <Trophy className="w-4 h-4 inline mr-1 text-amber-500" />{highScore}
           </span>
-          {/* Settings Button */}
           <button
             onClick={() => setShowSettings(true)}
             className="p-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
@@ -1406,242 +1562,379 @@ const GestureDrawing = () => {
         </div>
       </div>
 
-      {/* AI Status + Settings */}
-      <div className="glass-card rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-sm">
-        <div className="flex items-center gap-2">
-          <span className={isLoading ? 'text-indigo-500 font-semibold' : isPlaying ? 'text-green-500 font-semibold' : 'text-gray-400 font-semibold'}>
-            {isLoading ? '🧠 Loading AI model…' : isPlaying ? '🟢 Tracking' : '⚪ Paused'}
-          </span>
-          {isPlaying && !isLoading && (
-            handConfidence >= MIN_HAND_CONFIDENCE * 100 ? (
-              <span className="text-gray-500">AI confidence: {handConfidence}%</span>
-            ) : (
-              <span className="text-amber-500 flex items-center gap-1">
-                <AlertCircle className="w-4 h-4" />
-                {handConfidence > 0 ? `Low confidence (${handConfidence}%)` : 'No hand detected'}
-              </span>
-            )
-          )}
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <button
-            onClick={() => setSoundEnabled(s => !s)}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-            title={soundEnabled ? 'Mute sound' : 'Enable sound'}
-          >
-            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={() => setShowHint(h => !h)}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-            title={showHint ? 'Hide hint outline' : 'Show hint outline'}
-          >
-            {showHint ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />} Hint
-          </button>
-          <label className="flex items-center gap-2 text-gray-500">
-            Pinch sensitivity
-            <input
-              type="range"
-              min="0.04"
-              max="0.14"
-              step="0.01"
-              value={pinchSensitivity}
-              onChange={(e) => setPinchSensitivity(parseFloat(e.target.value))}
-              className="w-24 accent-primary-500"
-            />
-          </label>
-        </div>
-      </div>
-
-      {/* Shape Info */}
+      {/* Shape Banner & Progressive Tier Details */}
       <div className="glass-card rounded-xl p-4 text-center">
-        <h2 className="text-2xl font-bold">
-          Draw: <span className="text-primary-600">{shapeName}</span>
-          <span className="ml-2 text-3xl">{SHAPE_LIBRARY[currentShapeKey]?.icon}</span>
-        </h2>
-        <p className="text-sm text-gray-500">
-          {shapeVariation?.description || 'Follow the pattern shown'}
+        <div className="flex items-center justify-center gap-2 flex-wrap">
+          <h2 className="text-2xl font-bold">
+            Draw: <span className="text-primary-600">{currentShape?.name || 'Loading Shape...'}</span>
+          </h2>
+          <span className="text-3xl">{currentShape?.icon}</span>
+          <span className={`ml-2 px-2.5 py-0.5 rounded-full text-xs font-bold ${
+            currentShape?.tier === 1 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' :
+            currentShape?.tier === 2 ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' :
+            currentShape?.tier === 3 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' :
+            'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+          }`}>
+            Tier {currentShape?.tier || 1}: {currentShape?.difficulty || 'Easy'}
+          </span>
+        </div>
+        <p className="text-sm font-medium text-gray-600 dark:text-gray-300 mt-1">
+          {currentShape?.description}
         </p>
-        {accuracy > 0 && (
-          <div className="mt-2">
-            <div className="w-full bg-gray-200 rounded-full h-2 max-w-xs mx-auto">
+
+        {/* Dynamic Step Instruction Banner */}
+        <div className="mt-3 inline-flex items-center gap-2 px-4 py-1.5 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-full font-bold text-sm border border-amber-200 dark:border-amber-800">
+          <Zap className="w-4 h-4 text-amber-500" />
+          {stepGuidance}
+        </div>
+
+        {/* Waypoint Progress Bar */}
+        {activeWaypoints.length > 0 && (
+          <div className="mt-3 max-w-sm mx-auto">
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
               <div 
-                className="bg-gradient-to-r from-primary-500 to-indigo-500 h-2 rounded-full transition-all duration-500"
-                style={{ width: `${accuracy}%` }}
+                className="bg-gradient-to-r from-emerald-400 to-primary-500 h-2.5 rounded-full transition-all duration-300"
+                style={{ width: `${Math.min(100, (passedWaypoints.length / (activeWaypoints.length - 1)) * 100)}%` }}
               />
             </div>
-            <p className="text-sm text-gray-500 mt-1">Accuracy: {Math.round(accuracy)}%</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Checkpoints: {passedWaypoints.length} of {activeWaypoints.length - 1} completed
+            </p>
           </div>
         )}
       </div>
 
-      {/* Demo Video / Canvas */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Demo Pattern */}
-        <div className="glass-card rounded-xl p-4">
-          <h3 className="text-center font-bold mb-2">📐 Pattern to Draw</h3>
-          <div className="relative bg-white dark:bg-gray-800 rounded-lg overflow-hidden" style={{ height: '300px' }}>
-            <canvas
-              ref={demoCanvasRef}
-              width="400"
-              height="300"
-              className="w-full h-full"
-            />
-            {showVideo && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                <button
-                  onClick={() => setShowVideo(false)}
-                  className="px-6 py-3 bg-primary-600 text-white rounded-lg font-bold hover:bg-primary-700"
-                >
-                  <Play className="w-5 h-5 inline mr-2" />
-                  Watch Demo
-                </button>
-              </div>
-            )}
+      {/* User-Requested Granular Hint Controls Toolbar */}
+      <div className="glass-card rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-sm">
+        <div className="flex items-center gap-2">
+          <span className={isLoading ? 'text-indigo-500 font-semibold' : isPlaying ? 'text-green-500 font-semibold' : 'text-gray-400 font-semibold'}>
+            {isLoading ? '🧠 Loading AI model…' : isPlaying ? '🟢 Tracking Active' : '⚪ Paused'}
+          </span>
+          {isPlaying && !isLoading && (
+            handConfidence >= 35 ? (
+              <span className="text-gray-500 font-medium text-xs">Signal: {handConfidence}%</span>
+            ) : (
+              <span className="text-amber-500 flex items-center gap-1 font-medium text-xs">
+                <AlertCircle className="w-3.5 h-3.5" />
+                {handConfidence > 0 ? `Weak (${handConfidence}%)` : 'Hand needed'}
+              </span>
+            )
+          )}
+        </div>
+
+        {/* Options to remove outline, numbers, and direction arrows from drawing box */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-bold text-gray-500 dark:text-gray-400 mr-1">Drawing Hints:</span>
+          
+          <button
+            onClick={() => setShowOutline(o => !o)}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              showOutline ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/40 dark:text-primary-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
+            }`}
+            title="Toggle outline guide"
+          >
+            {showOutline ? <Eye className="w-3.5 h-3.5 text-primary-500" /> : <EyeOff className="w-3.5 h-3.5" />}
+            Outline: {showOutline ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            onClick={() => setShowNumbers(n => !n)}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              showNumbers ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/40 dark:text-primary-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
+            }`}
+            title="Toggle checkpoint number labels"
+          >
+            <Hash className="w-3.5 h-3.5" />
+            Numbers: {showNumbers ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            onClick={() => setShowArrows(a => !a)}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              showArrows ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/40 dark:text-primary-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-400'
+            }`}
+            title="Toggle directional arrow"
+          >
+            <Navigation className="w-3.5 h-3.5" />
+            Arrows: {showArrows ? 'ON' : 'OFF'}
+          </button>
+
+          <button
+            onClick={() => {
+              const allOn = showOutline && showNumbers && showArrows;
+              setShowOutline(!allOn);
+              setShowNumbers(!allOn);
+              setShowArrows(!allOn);
+            }}
+            className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 transition-colors"
+          >
+            {showOutline && showNumbers && showArrows ? '🧹 Clean Canvas' : '✨ Show All'}
+          </button>
+
+          <button
+            onClick={() => setSoundEnabled(s => !s)}
+            className="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors ml-1"
+            title={soundEnabled ? 'Mute' : 'Unmute'}
+          >
+            {soundEnabled ? <Volume2 className="w-4 h-4 text-green-500" /> : <VolumeX className="w-4 h-4 text-gray-400" />}
+          </button>
+        </div>
+      </div>
+
+      {/* 3-PANEL WORKSPACE (Camera completely OUTSIDE drawing canvas!) */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+        {/* Panel 1: Step-by-Step Demo (md: 4 cols, lg: 3.5 cols) */}
+        <div className="md:col-span-4 lg:col-span-4 glass-card rounded-xl p-4 flex flex-col justify-between">
+          <div>
+            <h3 className="text-center font-bold mb-2 flex items-center justify-center gap-2">
+              <span>📐 Step-by-Step Demo</span>
+            </h3>
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg overflow-hidden border border-gray-100 dark:border-gray-700" style={{ height: '300px' }}>
+              <canvas
+                ref={demoCanvasRef}
+                width="360"
+                height="300"
+                className="w-full h-full"
+              />
+              {showVideo && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm text-white p-4">
+                  <p className="text-xs mb-3 text-center">Watch how to draw this shape step-by-step in exact sequence!</p>
+                  <button
+                    onClick={() => setShowVideo(false)}
+                    className="px-5 py-2.5 bg-gradient-to-r from-primary-500 to-indigo-600 text-white rounded-xl font-bold hover:shadow-lg transition-all flex items-center gap-2 text-sm"
+                  >
+                    <Play className="w-4 h-4" />
+                    Watch Demo
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="flex justify-center mt-2 space-x-2">
+          <div className="flex justify-center mt-3 space-x-2">
             <button
-              onClick={generateNewShape}
-              className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"
+              onClick={() => generateNewShape(level)}
+              className="px-3.5 py-2 bg-primary-600 text-white rounded-lg text-xs font-semibold hover:bg-primary-700 transition-colors flex items-center gap-1"
             >
-              <RefreshCw className="w-4 h-4 inline mr-1" />
+              <RefreshCw className="w-3.5 h-3.5" />
               New Shape
             </button>
             <button
               onClick={() => setShowVideo(true)}
-              className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600"
+              className="px-3.5 py-2 bg-amber-500 text-white rounded-lg text-xs font-semibold hover:bg-amber-600 transition-colors flex items-center gap-1"
             >
-              <Play className="w-4 h-4 inline mr-1" />
+              <Play className="w-3.5 h-3.5" />
               Replay Demo
             </button>
           </div>
         </div>
 
-        {/* User Drawing Canvas */}
-        <div className="glass-card rounded-xl p-4">
-          <h3 className="text-center font-bold mb-2">✋ Your Drawing</h3>
-          <div className="relative bg-white dark:bg-gray-800 rounded-lg overflow-hidden" style={{ height: '300px' }}>
+        {/* Panel 2: User Drawing Canvas (COMPLETELY UNOBSTRUCTED — 100% DRAWING AREA!) */}
+        <div className="md:col-span-8 lg:col-span-5 glass-card rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <h3 className="font-bold flex items-center gap-1.5 text-sm sm:text-base">
+              <span>✋ Your Drawing Canvas</span>
+              <span className="text-xs font-normal text-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                100% Unobstructed
+              </span>
+            </h3>
+
+            {/* Mode Switcher: Pinch to Draw (Default) vs Point & Draw */}
+            <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
+              <button
+                onClick={() => setDrawMode('pinch')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                  drawMode === 'pinch'
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+                title="Pinch thumb and index together to draw (Default)"
+              >
+                🤏 Pinch to Draw
+              </button>
+              <button
+                onClick={() => setDrawMode('point')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                  drawMode === 'point'
+                    ? 'bg-emerald-500 text-white shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+                title="Direct finger drawing: move index finger to draw"
+              >
+                👆 Point & Draw
+              </button>
+            </div>
+
+            {isDrawing && (
+              <span className="px-2.5 py-0.5 bg-emerald-500 text-white text-xs font-bold rounded-full animate-pulse shadow">
+                ✏️ Drawing ({drawMode === 'pinch' ? 'Pinch mode' : 'Point mode'})
+              </span>
+            )}
+          </div>
+          
+          <div className="relative bg-white dark:bg-gray-800 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 shadow-inner" style={{ height: '340px' }}>
             <canvas
               ref={canvasRef}
-              width="400"
-              height="300"
+              width="480"
+              height="340"
               className="w-full h-full"
             />
+
             {userDrawing.length === 0 && !isDrawing && (
-              <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-                <div className="text-center">
-                  <Camera className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                  <p>Pinch fingers to start drawing</p>
+              <div className="absolute inset-0 flex items-center justify-center text-gray-400 pointer-events-none">
+                <div className="text-center p-4">
+                  <Camera className="w-10 h-10 mx-auto mb-2 opacity-50 text-primary-500" />
+                  <p className="font-semibold text-gray-600 dark:text-gray-300">
+                    {drawMode === 'pinch' ? '🤏 Pinch fingers together to draw' : '👆 Move index finger to draw'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">Start at checkpoint 1 and trace in order</p>
                 </div>
               </div>
             )}
-            {isDrawing && (
-              <div className="absolute top-2 right-2 px-3 py-1 bg-green-500 text-white text-sm rounded-full animate-pulse">
-                Drawing...
-              </div>
-            )}
 
-            {/* Confetti burst on a successful match */}
+            {/* Confetti canvas */}
             <canvas
               ref={confettiCanvasRef}
-              width="400"
-              height="300"
+              width="480"
+              height="340"
               className="absolute inset-0 w-full h-full pointer-events-none"
             />
 
             {isNewHighScore && isComplete && (
-              <div className="absolute top-2 left-2 px-3 py-1 bg-amber-500 text-white text-sm rounded-full font-bold flex items-center gap-1 animate-bounce">
+              <div className="absolute top-2 left-2 px-3 py-1 bg-amber-500 text-white text-xs rounded-full font-bold flex items-center gap-1 shadow-lg animate-bounce">
                 <Trophy className="w-4 h-4" /> New High Score!
               </div>
             )}
+          </div>
+        </div>
 
-            {/* Live camera preview + pinch indicator — kept small but VISIBLE.
-                Hiding this with display:none (the old approach) causes some
-                browsers, especially mobile Safari, to pause video decoding
-                entirely, which is a major reason tracking silently failed. */}
-            <div className="absolute bottom-2 right-2 w-24 h-20 rounded-lg overflow-hidden border-2 border-white/80 shadow-lg bg-black">
+        {/* Panel 3: Dedicated Camera & Hand Tracking (OUTSIDE Drawing Canvas, ONLY Start Point!) */}
+        <div className="md:col-span-12 lg:col-span-3 glass-card rounded-xl p-4 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-bold flex items-center gap-1.5 text-sm">
+                <Camera className="w-4 h-4 text-primary-500" />
+                <span>Hand Camera</span>
+              </h3>
+              {isPinchingFingers ? (
+                <span className="bg-emerald-500 text-white font-bold px-2 py-0.5 rounded text-[10px] shadow animate-pulse">
+                  {drawMode === 'point' ? '👆 DRAWING' : '✏️ PINCHING'}
+                </span>
+              ) : (
+                <span className="bg-gray-100 dark:bg-gray-700 text-amber-500 font-semibold px-2 py-0.5 rounded text-[10px]">
+                  ✋ HOVERING
+                </span>
+              )}
+            </div>
+
+            <div className="relative bg-black rounded-lg overflow-hidden border-2 border-primary-500/30 shadow-lg" style={{ height: '260px' }}>
               <Webcam
                 ref={webcamRef}
                 mirrored={true}
                 audio={false}
-                videoConstraints={{ facingMode: 'user', width: { ideal: 320 }, height: { ideal: 240 } }}
+                videoConstraints={{ facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }}
                 className="w-full h-full object-cover"
                 onUserMedia={() => setIsCameraReady(true)}
-                onUserMediaError={() => setMessage('⚠️ Camera access denied. Please allow camera access in your browser settings.')}
+                onUserMediaError={() => setMessage('⚠️ Camera permission needed. Please allow camera access in browser.')}
               />
-              {/* Live AI hand-skeleton overlay — visible proof the model is
-                  actually locking onto the hand, and how confidently. */}
               <canvas
                 ref={previewCanvasRef}
-                width="320"
-                height="240"
+                width="640"
+                height="480"
                 className="absolute inset-0 w-full h-full pointer-events-none"
               />
-              {fingerPos && (
-                <div
-                  className={`absolute w-3 h-3 rounded-full border-2 border-white -translate-x-1/2 -translate-y-1/2 ${
-                    isDrawing ? 'bg-green-400' : 'bg-amber-400'
-                  }`}
-                  style={{ left: `${fingerPos.x * 100}%`, top: `${fingerPos.y * 100}%` }}
-                />
+
+              <div
+                ref={fingerCursorRef}
+                style={{ display: 'none' }}
+                className="absolute w-3.5 h-3.5 rounded-full border-2 border-white -translate-x-1/2 -translate-y-1/2 pointer-events-none bg-amber-400 shadow-[0_0_8px_#f59e0b]"
+              />
+
+              {/* Bottom prompt inside Camera Box */}
+              {targetWaypointIdx === 0 && (
+                <div className="absolute bottom-1.5 inset-x-2 bg-black/85 text-emerald-300 text-[10px] text-center font-bold py-1 px-1 rounded border border-emerald-500/50 backdrop-blur-xs shadow-md z-10 pointer-events-none">
+                  📍 Align hand with green START circle
+                </div>
               )}
+
               {!isCameraReady && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white text-[10px] text-center px-1">
-                  Enable camera
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-xs text-center px-2">
+                  Connecting Camera...
                 </div>
               )}
             </div>
           </div>
+
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 text-center mt-2">
+            Green circle shows starting point. Move hand into it, then pinch!
+          </p>
         </div>
       </div>
 
-      {/* Message */}
+      {/* Status Message */}
       {message && (
-        <div className={`p-4 rounded-xl text-center text-lg font-semibold ${
-          message.includes('✅') ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' :
-          message.includes('❌') ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' :
-          'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+        <div className={`p-4 rounded-xl text-center text-lg font-semibold shadow-sm transition-all ${
+          message.includes('✅') ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' :
+          message.includes('❌') ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200' :
+          message.includes('🚩') ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200' :
+          message.includes('⚠️') ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' :
+          'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200'
         }`}>
           {message}
         </div>
       )}
 
-      {/* Controls */}
+      {/* Action Controls */}
       <div className="flex justify-center space-x-4">
         <button
           onClick={() => setIsPlaying(!isPlaying)}
           disabled={isLoading}
-          className={`px-6 py-3 rounded-xl font-bold transition-all ${
+          className={`px-8 py-3.5 rounded-xl font-bold shadow-md transition-all ${
             isLoading
               ? 'bg-gray-300 dark:bg-gray-600 text-gray-500 cursor-not-allowed'
               : isPlaying 
                 ? 'bg-red-500 hover:bg-red-600 text-white' 
-                : 'bg-gradient-to-r from-primary-500 to-indigo-500 text-white hover:shadow-lg'
+                : 'bg-gradient-to-r from-primary-500 to-indigo-600 text-white hover:shadow-lg'
           }`}
         >
           {isLoading ? (
-            'Loading AI model…'
+            'Loading AI tracking…'
           ) : (
             <>
               {isPlaying ? <Pause className="w-5 h-5 inline mr-2" /> : <Play className="w-5 h-5 inline mr-2" />}
-              {isPlaying ? 'Pause' : 'Start Tracking'}
+              {isPlaying ? 'Pause Game' : 'Start Hand Tracking'}
             </>
           )}
         </button>
         
         <button
-          onClick={() => { setUserDrawing([]); setAccuracy(0); maxProgressRef.current = 0; lastPosRef.current = null; setMessage('🔄 Cleared! Try again.'); }}
-          className="px-6 py-3 bg-gray-200 dark:bg-gray-700 rounded-xl font-bold hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+          onClick={() => { 
+            userDrawingRef.current = [];
+            setUserDrawing([]); 
+            setTargetWaypointIdx(0); 
+            setPassedWaypoints([]);
+            targetWaypointIdxRef.current = 0;
+            passedWaypointsRef.current = [];
+            smoothPosRef.current = null;
+            filterXRef.current.reset();
+            filterYRef.current.reset();
+            drawUserDrawing([], null);
+            if (fingerCursorRef.current) fingerCursorRef.current.style.display = 'none';
+            if (activeWaypoints.length > 0) {
+              setStepGuidance(`Step 1 of ${activeWaypoints.length - 1}: Start at ${activeWaypoints[0].label} and draw towards ${activeWaypoints[1]?.label || 'end'}`);
+            }
+            setMessage('🔄 Reset! Start from checkpoint 1.'); 
+          }}
+          className="px-6 py-3.5 bg-gray-200 dark:bg-gray-700 rounded-xl font-bold hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
         >
           <RefreshCw className="w-5 h-5 inline mr-2" />
           Clear Drawing
         </button>
       </div>
 
-      {/* Instructions */}
+      {/* Rules & Help */}
       <div className="glass-card rounded-xl p-4 text-center text-sm text-gray-500">
-        <p>🤏 Pinch thumb and index finger together to draw • ✋ Release to check shape • 🎯 Match the pattern shown</p>
-        <p className="text-xs mt-1 text-amber-500">⚙️ Click the gear icon (⚙️) to adjust tracking sensitivity!</p>
+        <p>🤏 Pinch thumb & index to draw • 1mm smooth tracking • Checkpoints every 3 levels • Over 120+ shapes</p>
+        <p className="text-xs mt-1 text-primary-500 font-medium">⚙️ Use hint controls above canvas to practice memory drawing!</p>
       </div>
 
       {/* Sensitivity Settings Modal */}

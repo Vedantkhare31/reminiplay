@@ -6,6 +6,7 @@ import {
   Trophy, Coins, Volume2, VolumeX, Flag, HelpCircle, Sparkles, Layers
 } from 'lucide-react';
 import Confetti from 'react-confetti';
+import { useAuth } from '../context/AuthContext';
 import AIGameService from '../utils/aiGameService';
 import GameHistoryService from '../services/GameHistoryService';
 // =============================================================================
@@ -85,17 +86,27 @@ function useSoundEngine(isMuted) {
 // =============================================================================
 
 const MAX_LIVES = 5;
-const CHECKPOINT_EVERY = 5;
+const CHECKPOINT_EVERY = 3;
 const LIFE_COST_IN_COINS = 5;
 
 function usePlayerEngine() {
-  const [score, setScore] = useState(0);
+  const { user, syncProgress } = useAuth();
+  const [score, setScore] = useState(user?.score || 0);
   const [bestScore, setBestScore] = useState(0);
-  const [coins, setCoins] = useState(0);
-  const [level, setLevel] = useState(1);
+  const [coins, setCoins] = useState(user?.coins ?? 100);
+  const [level, setLevel] = useState(user?.level || 1);
   const [lives, setLives] = useState(3);
   const [combo, setCombo] = useState(0);
-  const [checkpointLevel, setCheckpointLevel] = useState(1);
+  const [checkpointLevel, setCheckpointLevel] = useState(user?.gameStats?.checkpointLevel || 1);
+
+  useEffect(() => {
+    if (user) {
+      if (user.coins !== undefined) setCoins(user.coins);
+      if (user.score !== undefined) setScore(user.score);
+      if (user.level !== undefined) setLevel(user.level);
+      if (user.gameStats?.checkpointLevel) setCheckpointLevel(user.gameStats.checkpointLevel);
+    }
+  }, [user]);
   const [showTutorial, setShowTutorial] = useState(true);
   const [gameOver, setGameOver] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -121,21 +132,40 @@ function usePlayerEngine() {
 
   const triggerGameOver = useCallback(() => {
     setGameOver(true);
-    setBestScore((b) => Math.max(b, scoreRef.current));
+    const newBest = Math.max(bestScore, scoreRef.current);
+    setBestScore(newBest);
+    if (syncProgress) {
+      syncProgress({ coins, score: scoreRef.current, level, gameStats: { checkpointLevel } });
+    }
     playSound('gameover');
-  }, [playSound]);
+  }, [coins, level, checkpointLevel, syncProgress, bestScore, playSound]);
 
   const recordCorrect = useCallback((basePoints) => {
     let awardedPoints = 0;
     setCombo((c) => {
       const newCombo = c + 1;
-      const comboBonus = Math.floor(newCombo / 3) * Math.ceil(basePoints / 2);
-      awardedPoints = basePoints * level + comboBonus;
+      const comboBonus = Math.floor(newCombo / 2) * Math.ceil(basePoints / 2);
+      // Random mystery points (50% chance of +15 to +40 random bonus points)
+      const randomPointsBonus = Math.random() < 0.50 ? (15 + Math.floor(Math.random() * 25)) : 0;
+      awardedPoints = basePoints * level + comboBonus + randomPointsBonus;
       setScore((s) => s + awardedPoints);
-      if (newCombo > 0 && newCombo % 4 === 0 && Math.random() < 0.35) {
-        const bonus = 1 + Math.floor(Math.random() * 2);
-        setCoins((c2) => c2 + bonus);
-        pushToast(`🪙 Combo bonus! +${bonus} coin${bonus > 1 ? 's' : ''}`, 'coin');
+
+      // Random coin reward on correct answer:
+      let coinsEarned = 0;
+      if (newCombo % 2 === 0) {
+        coinsEarned += 1;
+      }
+      if (Math.random() < 0.45) {
+        coinsEarned += 1 + Math.floor(Math.random() * 3);
+      }
+      if (Math.random() < 0.12) {
+        coinsEarned += 10;
+        pushToast('🎁 Lucky Mystery Chest! +10 Coins!', 'coin');
+      }
+
+      if (coinsEarned > 0) {
+        setCoins((c2) => c2 + coinsEarned);
+        pushToast(`🪙 +${coinsEarned} Coin${coinsEarned > 1 ? 's' : ''}!`, 'coin');
       }
       return newCombo;
     });
@@ -151,8 +181,9 @@ function usePlayerEngine() {
       if (newLevel % CHECKPOINT_EVERY === 0) {
         setCheckpointLevel(newLevel);
         setLives((li) => Math.min(li + 1, MAX_LIVES));
+        setCoins((c) => c + 20);
         setTimeout(() => {
-          pushToast(`🚩 Checkpoint! Level ${newLevel} saved — +1 life`, 'checkpoint');
+          pushToast(`🚩 Checkpoint Level ${newLevel} Saved! +1 Life & +20 Coins!`, 'checkpoint');
           playSound('checkpoint');
         }, 250);
       }
@@ -220,11 +251,16 @@ function usePlayerEngine() {
       pushToast(`🪙 Need ${LIFE_COST_IN_COINS} coins to restore a life`, 'info');
       return;
     }
-    setCoins((c) => c - LIFE_COST_IN_COINS);
-    setLives((l) => Math.min(l + 1, MAX_LIVES));
+    const newCoins = coins - LIFE_COST_IN_COINS;
+    const newLives = Math.min(lives + 1, MAX_LIVES);
+    setCoins(newCoins);
+    setLives(newLives);
+    if (syncProgress) {
+      syncProgress({ coins: newCoins, score, level, gameStats: { checkpointLevel, lives: newLives } });
+    }
     playSound('coin');
     pushToast('💚 Life restored!', 'coin');
-  }, [coins, lives, playSound, pushToast]);
+  }, [coins, lives, score, level, checkpointLevel, syncProgress, playSound, pushToast]);
 
   const restart = useCallback((fromCheckpoint) => {
     setScore(0);
