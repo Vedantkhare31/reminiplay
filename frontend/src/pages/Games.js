@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Brain, Clock, Puzzle, BookOpen, Users, Heart, Star, Hand, Sparkles , Layers} from 'lucide-react';
+import { Brain, Clock, Puzzle, BookOpen, Users, Heart, Star, Hand, Sparkles , Layers, Box } from 'lucide-react';
 
 const Games = () => {
   const { t } = useTranslation();
@@ -13,9 +13,10 @@ const Games = () => {
     { id: 3, name: t('games.patternQuest'), description: t('games.patternQuestDesc'), icon: Puzzle, difficulty: t('games.difficulty.medium'), color: 'from-green-500 to-emerald-500', plays: 654, rating: 4.7, path: '/game/3', category: 'pattern' },
     { id: 4, name: t('games.storyWeaver'), description: t('games.storyWeaverDesc'), icon: BookOpen, difficulty: t('games.difficulty.hard'), color: 'from-orange-500 to-red-500', plays: 432, rating: 4.9, path: '/game/4', category: 'narrative' },
     { id: 5, name: t('games.facePlace'), description: t('games.facePlaceDesc'), icon: Users, difficulty: t('games.difficulty.easy'), color: 'from-indigo-500 to-violet-500', plays: 987, rating: 4.5, path: '/game/5', category: 'recognition' },
-    {id: 6, name: 'Card Flip', description: 'Flip cards to find matching pairs before time runs out', icon: Layers, difficulty: t('games.difficulty.medium'), color: 'from-violet-500 to-purple-500',  plays: 542, rating: 4.8, path: '/game/6', category: 'memory'},
+    { id: 6, name: 'Card Flip', description: 'Flip cards to find matching pairs before time runs out', icon: Layers, difficulty: t('games.difficulty.medium'), color: 'from-violet-500 to-purple-500',  plays: 542, rating: 4.8, path: '/game/6', category: 'memory'},
     { id: 7, name: t('games.mindfulMoments'), description: t('games.mindfulMomentsDesc'), icon: Heart, difficulty: t('games.difficulty.medium'), color: 'from-rose-500 to-pink-500', plays: 321, rating: 4.9, path: '/game/7', category: 'focus' },
-   { id:'gesture-drawing' , name: t('games.gestureDrawing'), description: t('games.gestureDrawingDesc'), icon: Hand, difficulty: t('games.difficulty.medium'), color: 'from-indigo-500 to-purple-500', plays: 234, rating: 4.9, path: '/game/gesture-drawing', category: 'gesture' },
+    { id:'gesture-drawing' , name: t('games.gestureDrawing'), description: t('games.gestureDrawingDesc'), icon: Hand, difficulty: t('games.difficulty.medium'), color: 'from-indigo-500 to-purple-500', plays: 234, rating: 4.9, path: '/game/gesture-drawing', category: 'gesture' },
+    { id: 'gesture-rubik', name: 'Gesture Rubik\'s Cube', description: 'HD 3D Rubik\'s cube with hand tracking, zero pressure & real-time cognitive pace', icon: Box, difficulty: 'Relaxed', color: 'from-amber-500 to-rose-500', plays: 412, rating: 4.9, path: '/game/gesture-rubik', category: 'gesture' },
   ];
 
   const filteredGames = filter === 'all' ? games : games.filter(g => g.category === filter);
@@ -74,6 +75,12 @@ const Games = () => {
           className={`pill-tab ${filter === 'focus' ? 'active' : ''}`}
         >
           Focus
+        </button>
+        <button 
+          onClick={() => setFilter('gesture')}
+          className={`pill-tab ${filter === 'gesture' ? 'active' : ''}`}
+        >
+          Gesture
         </button>
       </div>
 

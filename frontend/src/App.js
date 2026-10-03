@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard';
 import Games from './pages/Games';
 import GamePlay from './pages/GamePlay';
 import GestureDrawing from './pages/GestureDrawing';
+import GestureRubiksCube from './pages/GestureRubiksCube';
 import DoctorDashboard from './pages/DoctorDashboard';
 import PatientProfile from './pages/PatientProfile';
 import Patients from './pages/Patients';
@@ -59,6 +60,7 @@ function AppRoutes() {
         <Route path="games" element={<Games />} />
         <Route path="game/:id" element={<GamePlay />} />
         <Route path="game/gesture-drawing" element={<GestureDrawing />} />
+        <Route path="game/gesture-rubik" element={<GestureRubiksCube />} />
         <Route path="doctor" element={<DoctorDashboard />} />
         <Route path="patient/:id" element={<PatientProfile />} />
         <Route path="patients" element={<Patients />} />
