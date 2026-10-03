@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 
 const GMAIL_SENDER = process.env.GMAIL_USER || 'reminiplayapp@gmail.com';
-const GMAIL_PASS = process.env.GMAIL_APP_PASSWORD || '';
+const GMAIL_PASS = process.env.GMAIL_APP_PASSWORD || 'vjgr gbbd cjgy xfmg';
 
 // Create reusable transporter object using direct Gmail SMTP
 const createTransporter = () => {
