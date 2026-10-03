@@ -180,5 +180,5 @@ class GameHistoryService {
     return achievements;
   }
 }
-
-export default new GameHistoryService();
+const gameHistoryService = new GameHistoryService();
+export default gameHistoryService;

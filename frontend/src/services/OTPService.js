@@ -159,5 +159,5 @@ class OTPService {
     }
   }
 }
-
-export default new OTPService();
+const otpService = new OTPService();
+export default otpService;
