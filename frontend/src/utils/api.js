@@ -11,8 +11,10 @@ const getApiBaseUrl = () => {
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return `http://${hostname}:5000`;
     }
+    // On Vercel / production, use same-origin relative URLs (/api/...)
+    return '';
   }
-  return 'http://localhost:5000';
+  return '';
 };
 
 const api = axios.create({
@@ -26,8 +28,8 @@ const api = axios.create({
 // Request interceptor to attach JWT token
 api.interceptors.request.use(
   (config) => {
-    // Keep baseURL in sync with current window location
-    if (!config.baseURL || config.baseURL === 'http://localhost:5000') {
+    // Keep baseURL in sync
+    if (config.baseURL === undefined || config.baseURL === null) {
       config.baseURL = getApiBaseUrl();
     }
     const token = localStorage.getItem('reminiplay_token');
@@ -44,7 +46,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
-      const targetUrl = getApiBaseUrl();
+      const targetUrl = getApiBaseUrl() || (typeof window !== 'undefined' ? window.location.origin : 'server');
       error.friendlyMessage = `Cannot reach backend server (${targetUrl}). Please check server status or internet connection.`;
     }
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {

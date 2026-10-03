@@ -39,11 +39,19 @@
     "use-sound": "^5.0.0",
     "workbox-background-sync": "^7.0.0",
     "workbox-routing": "^7.0.0",
-    "workbox-strategies": "^7.0.0"
+    "workbox-strategies": "^7.0.0",
+    "@prisma/client": "^6.19.3",
+    "prisma": "^6.19.3",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^6.10.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "CI=false react-scripts build",
+    "build": "prisma generate && react-scripts build",
+    "postinstall": "prisma generate",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
