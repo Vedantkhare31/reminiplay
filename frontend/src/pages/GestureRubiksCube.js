@@ -6,212 +6,226 @@ import * as handPoseDetection from '@tensorflow-models/hand-pose-detection';
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-backend-webgl';
 import {
-  ArrowLeft, Camera, Eye, EyeOff, RefreshCw,
-  Trophy, Sparkles, Volume2, VolumeX,
-  Play, Pause, Compass, Lightbulb, Zap, HelpCircle,
-  RotateCw, RotateCcw, Award, CheckCircle2, ChevronRight,
-  Hand, Move
+  ArrowLeft, Camera, RefreshCw, Trophy, Sparkles,
+  Volume2, VolumeX, Compass, Lightbulb, CheckCircle2,
+  ChevronRight, Hand, X
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 // ============================================================
-// AUDIO SOUND SYNTHESIZER
+// AUDIO
 // ============================================================
-function playTone(freq, duration, type = 'sine', delay = 0) {
+function playTone(freq, dur, type = 'sine', delay = 0) {
   try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
     setTimeout(() => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = type;
       osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.14, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + duration / 1000);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur / 1000);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + dur / 1000);
     }, delay);
   } catch (e) {}
 }
-
-const playTurnSound = () => {
-  playTone(340, 70, 'sine');
-  playTone(460, 80, 'sine', 35);
-};
-
-const playSuccessSound = () => {
-  playTone(523.25, 120, 'sine');
-  playTone(659.25, 120, 'sine', 90);
-  playTone(783.99, 150, 'sine', 180);
-  playTone(1046.5, 300, 'sine', 270);
-};
-
-const playHintSound = () => {
-  playTone(660, 100, 'sine');
-  playTone(880, 140, 'sine', 80);
-};
+const playTurnSound    = () => { playTone(340,70); playTone(460,80,  'sine',35); };
+const playSuccessSound = () => { playTone(523,120); playTone(659,120,'sine',90); playTone(784,150,'sine',180); playTone(1046,300,'sine',270); };
+const playHintSound    = () => { playTone(660,100); playTone(880,140,'sine',80); };
 
 // ============================================================
-// HD COLOR PALETTE (OFFICIAL VIBRANT STICKERS)
+// CUBE COLORS
 // ============================================================
 const CUBE_COLORS = {
-  RIGHT: 0xb71234,  // Red (+X)
-  LEFT: 0xff5800,   // Orange (-X)
-  UP: 0xffffff,     // White (+Y)
-  DOWN: 0xffd500,   // Yellow (-Y)
-  FRONT: 0x009b48,  // Green (+Z)
-  BACK: 0x0046ad,   // Blue (-Z)
-  INSIDE: 0x18181b, // Charcoal Matte Core
+  RIGHT: 0xb71234, LEFT: 0xff5800, UP: 0xffffff,
+  DOWN: 0xffd500, FRONT: 0x009b48, BACK: 0x0046ad,
+  INSIDE: 0x18181b,
 };
 
-// Hand skeleton landmarks topology
+// Hand skeleton connections
 const HAND_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
-  [0, 5], [5, 6], [6, 7], [7, 8],       // Index
-  [5, 9], [9, 10], [10, 11], [11, 12],   // Middle
-  [9, 13], [13, 14], [14, 15], [15, 16], // Ring
-  [13, 17], [17, 18], [18, 19], [19, 20],// Pinky
-  [0, 17]                               // Palm base
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17],
 ];
 
 // ============================================================
-// EXPONENTIAL SMOOTHING FILTER FOR JITTER-FREE TRACKING
+// EMA SMOOTHING (velocity-adaptive)
 // ============================================================
-class SmoothPoint {
-  constructor(smoothing = 0.6) {
-    this.alpha = smoothing;
-    this.x = null;
-    this.y = null;
-  }
+class Smoother {
+  constructor(alpha = 0.5) { this.a = alpha; this.x = null; this.y = null; }
   filter(x, y) {
-    if (this.x === null || this.y === null) {
-      this.x = x;
-      this.y = y;
-      return { x, y };
-    }
-    // Velocity-adaptive: fast moves get less smoothing (more responsive),
-    // slow/still moves get more smoothing (less jitter)
-    const dx = Math.abs(x - this.x);
-    const dy = Math.abs(y - this.y);
-    const speed = dx + dy;
-    const a = speed > 15 ? Math.min(this.alpha + 0.25, 0.9) : this.alpha;
-    this.x = this.x * (1 - a) + x * a;
-    this.y = this.y * (1 - a) + y * a;
+    if (this.x === null) { this.x = x; this.y = y; return { x, y }; }
+    const speed = Math.abs(x - this.x) + Math.abs(y - this.y);
+    const a = speed > 20 ? Math.min(this.a + 0.3, 0.92) : this.a;
+    this.x += (x - this.x) * a;
+    this.y += (y - this.y) * a;
     return { x: this.x, y: this.y };
   }
-  reset() {
-    this.x = null;
-    this.y = null;
-  }
+  reset() { this.x = null; this.y = null; }
 }
 
+// ============================================================
+// HOW TO PLAY MODAL
+// ============================================================
+function HowToPlayModal({ onClose }) {
+  const steps = [
+    { icon: '✋', color: 'text-cyan-400', title: 'Left Hand — Spin the Cube', desc: 'Hold your LEFT hand in view and move it left/right or up/down to rotate the entire cube so you can see all sides.' },
+    { icon: '👋', color: 'text-emerald-400', title: 'Right Hand — Choose a Layer', desc: 'Move your RIGHT hand into one of the 6 colored zones shown on the camera preview. Each zone targets a cube layer (Top, Bottom, Left, Right, Front, Back).' },
+    { icon: '⬅️➡️', color: 'text-amber-400', title: 'Swipe to Rotate a Layer', desc: 'Once a layer is highlighted (it glows blue), quickly SWIPE your right hand LEFT or RIGHT to rotate that layer clockwise or counter-clockwise.' },
+    { icon: '⬆️⬇️', color: 'text-rose-400', title: 'Swipe Up/Down too!', desc: 'You can also swipe UP or DOWN to rotate side layers (Left/Right faces) in the vertical direction.' },
+    { icon: '🧩', color: 'text-indigo-400', title: 'Goal: Make all sides one colour!', desc: 'Match all 9 squares on every face to the same colour. Take your time — there is no time limit and you can always ask for a Hint!' },
+  ];
+  return (
+    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-slate-800 border border-slate-700 rounded-3xl p-6 max-w-md w-full shadow-2xl relative">
+        <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">
+          <X className="w-4 h-4" />
+        </button>
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-400 to-rose-500 flex items-center justify-center text-xl">🎮</div>
+          <div>
+            <h2 className="text-lg font-black text-white">How to Play</h2>
+            <p className="text-xs text-slate-400">Gesture Rubik's Cube</p>
+          </div>
+        </div>
+        <div className="space-y-4 mb-6">
+          {steps.map((s, i) => (
+            <div key={i} className="flex gap-3 items-start">
+              <div className="text-2xl mt-0.5 w-8 flex-shrink-0 text-center">{s.icon}</div>
+              <div>
+                <p className={`text-sm font-bold ${s.color}`}>{s.title}</p>
+                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">{s.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={onClose}
+          className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white rounded-xl font-bold text-sm shadow-lg flex items-center justify-center gap-2"
+        >
+          <span>Let's Play!</span>
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ============================================================
-// MAIN COMPONENT: GESTURE RUBIK'S CUBE
+// GESTURE ZONE OVERLAY (6 zones mapped to 6 faces)
+// ============================================================
+//  Camera preview is 320×240 (or scaled). 
+//  We divide the right-hand's position into 6 zones:
+//   Top-Left=U, Top-Right=U, Middle-Left=L, Middle-Right=R, Bottom-Left=D, Bottom-Right=D
+//  Actually we use 3 rows × 2 cols:
+//   Top row (y<0.33): U (Top)
+//   Mid row (y 0.33-0.67): Left side → L, Right side → R
+//   Bot row (y>0.67): D (Bottom)
+//  Plus: x<0.2 → B (Back), x>0.8 → F (Front)  [far edges]
+function getLayerFromZone(nx, ny) {
+  // nx, ny are 0..1 normalised (0,0)=top-left
+  if (ny < 0.28) return { axis: 'y', layerIndex: 1,  name: 'U – Top',    move: { cw: 'U',  ccw: "U'" } };
+  if (ny > 0.72) return { axis: 'y', layerIndex: -1, name: 'D – Bottom', move: { cw: 'D',  ccw: "D'" } };
+  if (nx < 0.38) return { axis: 'x', layerIndex: -1, name: 'L – Left',   move: { cw: 'L',  ccw: "L'" } };
+  if (nx > 0.62) return { axis: 'x', layerIndex: 1,  name: 'R – Right',  move: { cw: 'R',  ccw: "R'" } };
+  // Centre → front face
+  return { axis: 'z', layerIndex: 1, name: 'F – Front', move: { cw: 'F', ccw: "F'" } };
+}
+
+// ============================================================
+// MAIN COMPONENT
 // ============================================================
 const GestureRubiksCube = () => {
   const navigate = useNavigate();
   const { user, syncProgress } = useAuth();
 
-  // DOM Canvas & Container Refs
-  const mountRef = useRef(null);
-  const webcamRef = useRef(null);
-  const previewCanvasRef = useRef(null);
+  // ── DOM refs ──────────────────────────────────────────────
+  const mountRef        = useRef(null);
+  const webcamRef       = useRef(null);
+  const canvasRef       = useRef(null);
   const confettiCanvasRef = useRef(null);
   const confettiAnimRef = useRef(null);
 
-  // Three.js References
-  const sceneRef = useRef(null);
-  const cameraRef = useRef(null);
-  const rendererRef = useRef(null);
-  const cubeGroupRef = useRef(null);
-  const cubiesRef = useRef([]);
-  const isAnimatingRef = useRef(false);
-  const moveQueueRef = useRef([]);
+  // ── Three.js refs ─────────────────────────────────────────
+  const sceneRef       = useRef(null);
+  const cameraRef      = useRef(null);
+  const rendererRef    = useRef(null);
+  const cubeGroupRef   = useRef(null);
+  const cubiesRef      = useRef([]);
+  const isAnimRef      = useRef(false);
+  const moveQueueRef   = useRef([]);
 
-  // Mouse / Touch orbit refs
-  const isDraggingCubeRef = useRef(false);
-  const previousMousePositionRef = useRef({ x: 0, y: 0 });
+  // ── Target rotation for 60 FPS lerp ──────────────────────
+  const targetRotRef   = useRef({ x: 0.4, y: 0.6 });
 
-  // Game States — ALWAYS START AT LEVEL 1 FOR RUBIK'S CUBE (No 4th level glitch!)
-  const [level, setLevel] = useState(user?.gameStats?.rubiksCubeLevel || 1);
-  const [coins, setCoins] = useState(user?.coins ?? 100);
+  // ── Mouse fallback ────────────────────────────────────────
+  const isDraggingRef  = useRef(false);
+  const prevMouseRef   = useRef({ x: 0, y: 0 });
+
+  // ── Gesture state refs (no React re-renders in loop) ──────
+  const detectorRef    = useRef(null);
+  const ctxRef         = useRef(null);
+  const leftSmoother   = useRef(new Smoother(0.45));
+  const rightSmoother  = useRef(new Smoother(0.55));
+  const prevLeftRef    = useRef(null);
+  const swipeStartRef  = useRef(null);
+  const swipeLockRef   = useRef(false);
+  const lastMoveRef    = useRef(0);
+  const lastCountRef   = useRef(0);
+  const currentZoneRef = useRef(null);
+  const executeMoveRef = useRef(null);
+  const highlightRef   = useRef(null);
+  const stageSolvedRef = useRef(false);
+
+  // ── UI state ──────────────────────────────────────────────
+  const [level, setLevel]           = useState(user?.gameStats?.rubiksCubeLevel || 1);
+  const [coins, setCoins]           = useState(user?.coins ?? 100);
   const [totalSolved, setTotalSolved] = useState(0);
   const [stageSolved, setStageSolved] = useState(false);
-  const [moveCount, setMoveCount] = useState(0);
-  const [isSoundEnabled, setIsSoundEnabled] = useState(true);
-  const [isDetectorReady, setIsDetectorReady] = useState(false);
-  const [detectedHandCount, setDetectedHandCount] = useState(0);
-  const [showWebcam, setShowWebcam] = useState(true);
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [targetedLayer, setTargetedLayer] = useState(null);
-  const [isPinching, setIsPinching] = useState(false);
-  const [hintMove, setHintMove] = useState(null);
-  const [stageStartTime, setStageStartTime] = useState(Date.now());
+  const [moveCount, setMoveCount]   = useState(0);
+  const [isSoundOn, setIsSoundOn]   = useState(true);
+  const [detectorReady, setDetectorReady] = useState(false);
+  const [handCount, setHandCount]   = useState(0);
+  const [showCam, setShowCam]       = useState(true);
+  const [activeZone, setActiveZone] = useState(null);
+  const [hintMove, setHintMove]     = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [scrambleDepth, setScrambleDepth] = useState(1);
-  const [cognitiveFeedback, setCognitiveFeedback] = useState('Welcome to Stage 1! Just 1 gentle turn to solve.');
-  const [patientStats, setPatientStats] = useState({
-    avgSolveTime: 0,
-    performanceRating: 'Optimal',
-  });
+  const [stageStartTime, setStageStartTime] = useState(Date.now());
+  const [feedback, setFeedback]     = useState('Welcome! Use your hands to solve the cube. Take your time!');
+  const [patientStats, setPatientStats] = useState({ avgSolveTime: 0, rating: 'Great' });
+  const [showHowTo, setShowHowTo]   = useState(true);
+  const [swipeDir, setSwipeDir]     = useState(null); // visual swipe indicator
 
-  // Hand gesture tracking state
-  const detectorRef = useRef(null);
-  const isDetectingRef = useRef(false);
-  const lastDetectTimeRef = useRef(0);
-  const gestureLockRef = useRef(false);
-  const lastGestureTimeRef = useRef(0);
-  const pinchStartPosRef = useRef(null);
-  const targetedLayerRef = useRef(null);
-  const isPinchingRef = useRef(false);
-  const tickRef = useRef(null);
-  const lastCountUpdateRef = useRef(0);
+  const scrambleHistRef = useRef([]);
 
-  // Smoothing filters for jitter reduction (velocity-adaptive EMA)
-  const orbitHandSmoothRef = useRef(new SmoothPoint(0.55));
-  const pointerHandSmoothRef = useRef(new SmoothPoint(0.65));
-  const prevOrbitPosRef = useRef(null);
-  const previewCtxRef = useRef(null);
-  const targetRotationRef = useRef({ x: 0, y: 0 });
-  const executeMoveRef = useRef(null);
-  const highlightTargetLayerRef = useRef(null);
-  const stageSolvedRef = useRef(false);
-  const persistentHandsRef = useRef({
-    orbit: { x: 200, y: 240, lastSeen: 0 },
-    pointer: { x: 440, y: 240, lastSeen: 0 },
-  });
-
-  // Scramble sequence history to compute reverse solution / hints
-  const scrambleHistoryRef = useRef([]);
-
-  // Raycaster for pointing hand
-  const raycasterRef = useRef(new THREE.Raycaster());
-
-  // ============================================================
-  // 1. THREE.JS HD CUBE INITIALIZATION
-  // ============================================================
+  // ─────────────────────────────────────────────────────────
+  // 1. THREE.JS CUBE
+  // ─────────────────────────────────────────────────────────
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
 
-    const width = container.clientWidth || 640;
-    const height = container.clientHeight || 540;
+    const w = container.clientWidth || 600;
+    const h = container.clientHeight || 500;
 
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
     camera.position.set(5.5, 4.5, 6.5);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    // High-DPI WebGL Renderer (HD Crisp, Not Blurry!)
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
-    renderer.setSize(width, height);
+    renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -219,79 +233,36 @@ const GestureRubiksCube = () => {
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
-    scene.add(ambientLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    const dl1 = new THREE.DirectionalLight(0xffffff, 0.9);
+    dl1.position.set(8, 14, 10); dl1.castShadow = true;
+    scene.add(dl1);
+    const dl2 = new THREE.DirectionalLight(0x93c5fd, 0.4);
+    dl2.position.set(-8, -6, -8);
+    scene.add(dl2);
 
-    const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.9);
-    dirLight1.position.set(8, 14, 10);
-    dirLight1.castShadow = true;
-    scene.add(dirLight1);
-
-    const dirLight2 = new THREE.DirectionalLight(0x93c5fd, 0.5);
-    dirLight2.position.set(-8, -6, -8);
-    scene.add(dirLight2);
-
-    // Cube Master Group
     const cubeGroup = new THREE.Group();
     scene.add(cubeGroup);
     cubeGroupRef.current = cubeGroup;
 
-    // Build 26 Rubik's Cubies
     const cubies = [];
-    const cubieSize = 0.94;
-    const geometry = new THREE.BoxGeometry(cubieSize, cubieSize, cubieSize);
+    const geo = new THREE.BoxGeometry(0.93, 0.93, 0.93);
 
     for (let x = -1; x <= 1; x++) {
       for (let y = -1; y <= 1; y++) {
         for (let z = -1; z <= 1; z++) {
           if (x === 0 && y === 0 && z === 0) continue;
-
-          const materials = [
-            new THREE.MeshStandardMaterial({
-              color: x === 1 ? CUBE_COLORS.RIGHT : CUBE_COLORS.INSIDE,
-              roughness: 0.12,
-              metalness: 0.05,
-              emissive: new THREE.Color(0x000000),
-            }),
-            new THREE.MeshStandardMaterial({
-              color: x === -1 ? CUBE_COLORS.LEFT : CUBE_COLORS.INSIDE,
-              roughness: 0.12,
-              metalness: 0.05,
-              emissive: new THREE.Color(0x000000),
-            }),
-            new THREE.MeshStandardMaterial({
-              color: y === 1 ? CUBE_COLORS.UP : CUBE_COLORS.INSIDE,
-              roughness: 0.12,
-              metalness: 0.05,
-              emissive: new THREE.Color(0x000000),
-            }),
-            new THREE.MeshStandardMaterial({
-              color: y === -1 ? CUBE_COLORS.DOWN : CUBE_COLORS.INSIDE,
-              roughness: 0.12,
-              metalness: 0.05,
-              emissive: new THREE.Color(0x000000),
-            }),
-            new THREE.MeshStandardMaterial({
-              color: z === 1 ? CUBE_COLORS.FRONT : CUBE_COLORS.INSIDE,
-              roughness: 0.12,
-              metalness: 0.05,
-              emissive: new THREE.Color(0x000000),
-            }),
-            new THREE.MeshStandardMaterial({
-              color: z === -1 ? CUBE_COLORS.BACK : CUBE_COLORS.INSIDE,
-              roughness: 0.12,
-              metalness: 0.05,
-              emissive: new THREE.Color(0x000000),
-            }),
+          const mats = [
+            new THREE.MeshStandardMaterial({ color: x ===  1 ? CUBE_COLORS.RIGHT  : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
+            new THREE.MeshStandardMaterial({ color: x === -1 ? CUBE_COLORS.LEFT   : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
+            new THREE.MeshStandardMaterial({ color: y ===  1 ? CUBE_COLORS.UP     : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
+            new THREE.MeshStandardMaterial({ color: y === -1 ? CUBE_COLORS.DOWN   : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
+            new THREE.MeshStandardMaterial({ color: z ===  1 ? CUBE_COLORS.FRONT  : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
+            new THREE.MeshStandardMaterial({ color: z === -1 ? CUBE_COLORS.BACK   : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
           ];
-
-          const mesh = new THREE.Mesh(geometry, materials);
+          const mesh = new THREE.Mesh(geo, mats);
           mesh.position.set(x, y, z);
           mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          mesh.userData = { initialX: x, initialY: y, initialZ: z };
-
           cubeGroup.add(mesh);
           cubies.push(mesh);
         }
@@ -299,1101 +270,772 @@ const GestureRubiksCube = () => {
     }
     cubiesRef.current = cubies;
 
-    // Render Loop
+    // 60 FPS render + lerp
     let animId;
     const animate = () => {
       animId = requestAnimationFrame(animate);
-
-      if (!isDraggingCubeRef.current) {
-        cubeGroup.position.y = Math.sin(Date.now() / 1400) * 0.05;
-      }
-
-      // Smooth 60 FPS damped rotation interpolation (silky smooth, zero stutter)
-      if (targetRotationRef.current) {
-        cubeGroup.rotation.y += (targetRotationRef.current.y - cubeGroup.rotation.y) * 0.28;
-        cubeGroup.rotation.x += (targetRotationRef.current.x - cubeGroup.rotation.x) * 0.28;
-      }
-
+      const tr = targetRotRef.current;
+      cubeGroup.rotation.y += (tr.y - cubeGroup.rotation.y) * 0.2;
+      cubeGroup.rotation.x += (tr.x - cubeGroup.rotation.x) * 0.2;
+      cubeGroup.position.y = Math.sin(Date.now() / 1500) * 0.04;
       renderer.render(scene, camera);
     };
     animate();
 
-    const handleResize = () => {
-      if (!container || !renderer || !camera) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      camera.aspect = w / h;
+    const onResize = () => {
+      if (!container || !renderer) return;
+      const nw = container.clientWidth; const nh = container.clientHeight;
+      camera.aspect = nw / nh;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      renderer.setSize(nw, nh);
     };
-    window.addEventListener('resize', handleResize);
+    window.addEventListener('resize', onResize);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('resize', onResize);
       cancelAnimationFrame(animId);
-      renderer.dispose();
-      geometry.dispose();
-      cubies.forEach((c) => {
-        if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
-      });
+      renderer.dispose(); geo.dispose();
+      cubies.forEach(c => { if (Array.isArray(c.material)) c.material.forEach(m => m.dispose()); });
     };
   }, []);
 
-  // ============================================================
-  // 2. LAYER ROTATION ENGINE (SMOOTH 60 FPS)
-  // ============================================================
-  const rotateLayer = useCallback((axis, layerIndex, angle, duration = 200) => {
-    return new Promise((resolve) => {
-      if (isAnimatingRef.current) {
-        moveQueueRef.current.push({ axis, layerIndex, angle, duration, resolve });
+  // ─────────────────────────────────────────────────────────
+  // 2. LAYER ROTATION ENGINE
+  // ─────────────────────────────────────────────────────────
+  const rotateLayer = useCallback((axis, layerIndex, angle, dur = 200) => {
+    return new Promise(resolve => {
+      if (isAnimRef.current) {
+        moveQueueRef.current.push({ axis, layerIndex, angle, dur, resolve });
         return;
       }
-
-      isAnimatingRef.current = true;
-      const cubeGroup = cubeGroupRef.current;
+      isAnimRef.current = true;
+      const cg = cubeGroupRef.current;
       const cubies = cubiesRef.current;
-      if (!cubeGroup || !cubies) {
-        isAnimatingRef.current = false;
-        resolve();
-        return;
-      }
+      if (!cg || !cubies) { isAnimRef.current = false; resolve(); return; }
 
-      const activeCubies = cubies.filter((mesh) => {
-        const pos = mesh.position;
-        const val = axis === 'x' ? pos.x : axis === 'y' ? pos.y : pos.z;
-        return Math.abs(val - layerIndex) < 0.2;
+      const active = cubies.filter(m => {
+        const v = axis === 'x' ? m.position.x : axis === 'y' ? m.position.y : m.position.z;
+        return Math.abs(v - layerIndex) < 0.3;
       });
 
       const pivot = new THREE.Group();
-      cubeGroup.add(pivot);
+      cg.add(pivot);
+      active.forEach(c => pivot.attach(c));
+      if (isSoundOn) playTurnSound();
 
-      activeCubies.forEach((cubie) => {
-        pivot.attach(cubie);
-      });
+      const t0 = performance.now();
+      const step = (t) => {
+        const p = Math.min((t - t0) / dur, 1);
+        const e = 1 - Math.pow(1 - p, 3);
+        if (axis === 'x') pivot.rotation.x = angle * e;
+        else if (axis === 'y') pivot.rotation.y = angle * e;
+        else pivot.rotation.z = angle * e;
 
-      if (isSoundEnabled) playTurnSound();
+        if (p < 1) { requestAnimationFrame(step); return; }
 
-      const startTime = performance.now();
+        if (axis === 'x') pivot.rotation.x = angle;
+        else if (axis === 'y') pivot.rotation.y = angle;
+        else pivot.rotation.z = angle;
+        pivot.updateMatrixWorld();
 
-      const animateStep = (time) => {
-        const elapsed = time - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        const ease = 1 - Math.pow(1 - progress, 3);
-        const currentAngle = angle * ease;
+        active.forEach(c => {
+          cg.attach(c);
+          c.position.x = Math.round(c.position.x);
+          c.position.y = Math.round(c.position.y);
+          c.position.z = Math.round(c.position.z);
+        });
+        cg.remove(pivot);
+        isAnimRef.current = false;
+        resolve();
 
-        if (axis === 'x') pivot.rotation.x = currentAngle;
-        else if (axis === 'y') pivot.rotation.y = currentAngle;
-        else pivot.rotation.z = currentAngle;
-
-        if (progress < 1) {
-          requestAnimationFrame(animateStep);
-        } else {
-          if (axis === 'x') pivot.rotation.x = angle;
-          else if (axis === 'y') pivot.rotation.y = angle;
-          else pivot.rotation.z = angle;
-          pivot.updateMatrixWorld();
-
-          activeCubies.forEach((cubie) => {
-            cubeGroup.attach(cubie);
-            cubie.position.x = Math.round(cubie.position.x);
-            cubie.position.y = Math.round(cubie.position.y);
-            cubie.position.z = Math.round(cubie.position.z);
-          });
-
-          cubeGroup.remove(pivot);
-          isAnimatingRef.current = false;
-          resolve();
-
-          if (moveQueueRef.current.length > 0) {
-            const next = moveQueueRef.current.shift();
-            rotateLayer(next.axis, next.layerIndex, next.angle, next.duration).then(next.resolve);
-          }
-        }
+        const nxt = moveQueueRef.current.shift();
+        if (nxt) rotateLayer(nxt.axis, nxt.layerIndex, nxt.angle, nxt.dur).then(nxt.resolve);
       };
-
-      requestAnimationFrame(animateStep);
+      requestAnimationFrame(step);
     });
-  }, [isSoundEnabled]);
+  }, [isSoundOn]);
 
-  const executeMove = useCallback(async (moveNotation, isUserMove = true) => {
-    if (stageSolved && isUserMove) return;
+  const executeMove = useCallback(async (notation, isUser = true) => {
+    if (stageSolvedRef.current && isUser) return;
+    const MAP = {
+      'U':  { axis:'y', layer:1,  angle:-Math.PI/2 },
+      "U'": { axis:'y', layer:1,  angle: Math.PI/2 },
+      'D':  { axis:'y', layer:-1, angle: Math.PI/2 },
+      "D'": { axis:'y', layer:-1, angle:-Math.PI/2 },
+      'R':  { axis:'x', layer:1,  angle:-Math.PI/2 },
+      "R'": { axis:'x', layer:1,  angle: Math.PI/2 },
+      'L':  { axis:'x', layer:-1, angle: Math.PI/2 },
+      "L'": { axis:'x', layer:-1, angle:-Math.PI/2 },
+      'F':  { axis:'z', layer:1,  angle:-Math.PI/2 },
+      "F'": { axis:'z', layer:1,  angle: Math.PI/2 },
+      'B':  { axis:'z', layer:-1, angle: Math.PI/2 },
+      "B'": { axis:'z', layer:-1, angle:-Math.PI/2 },
+    };
+    const m = MAP[notation]; if (!m) return;
+    await rotateLayer(m.axis, m.layer, m.angle, 190);
+    if (isUser) { setMoveCount(p => p + 1); checkSolved(); }
+  }, [rotateLayer]);
 
-    let axis = 'y';
-    let layer = 1;
-    let angle = -Math.PI / 2;
-
-    switch (moveNotation) {
-      case 'U':  axis = 'y'; layer = 1;  angle = -Math.PI / 2; break;
-      case "U'": axis = 'y'; layer = 1;  angle = Math.PI / 2;  break;
-      case 'D':  axis = 'y'; layer = -1; angle = Math.PI / 2;   break;
-      case "D'": axis = 'y'; layer = -1; angle = -Math.PI / 2;  break;
-      case 'R':  axis = 'x'; layer = 1;  angle = -Math.PI / 2; break;
-      case "R'": axis = 'x'; layer = 1;  angle = Math.PI / 2;  break;
-      case 'L':  axis = 'x'; layer = -1; angle = Math.PI / 2;  break;
-      case "L'": axis = 'x'; layer = -1; angle = -Math.PI / 2; break;
-      case 'F':  axis = 'z'; layer = 1;  angle = -Math.PI / 2; break;
-      case "F'": axis = 'z'; layer = 1;  angle = Math.PI / 2;  break;
-      case 'B':  axis = 'z'; layer = -1; angle = Math.PI / 2;   break;
-      case "B'": axis = 'z'; layer = -1; angle = -Math.PI / 2;  break;
-      default: return;
-    }
-
-    await rotateLayer(axis, layer, angle, 180);
-
-    if (isUserMove) {
-      setMoveCount((prev) => prev + 1);
-      checkIsCubeSolved();
-    }
-  }, [rotateLayer, stageSolved]);
-
-  // ============================================================
-  // 3. LAYER HOVER HIGHLIGHTING (TARGETING FEEDBACK)
-  // ============================================================
-  const highlightTargetLayer = useCallback((layerInfo) => {
+  // ─────────────────────────────────────────────────────────
+  // 3. HIGHLIGHT LAYER
+  // ─────────────────────────────────────────────────────────
+  const highlightLayer = useCallback((layerInfo) => {
     const cubies = cubiesRef.current;
     if (!cubies) return;
-
-    cubies.forEach((mesh) => {
-      let isMatch = false;
+    cubies.forEach(m => {
+      let match = false;
       if (layerInfo) {
-        const val = layerInfo.axis === 'x' ? mesh.position.x : layerInfo.axis === 'y' ? mesh.position.y : mesh.position.z;
-        isMatch = Math.abs(val - layerInfo.layerIndex) < 0.2;
+        const v = layerInfo.axis === 'x' ? m.position.x : layerInfo.axis === 'y' ? m.position.y : m.position.z;
+        match = Math.abs(v - layerInfo.layerIndex) < 0.3;
       }
-
-      mesh.material.forEach((mat) => {
+      m.material.forEach(mat => {
         if (mat.color.getHex() !== CUBE_COLORS.INSIDE) {
-          mat.emissive.setHex(isMatch ? 0x38bdf8 : 0x000000);
-          mat.emissiveIntensity = isMatch ? 0.35 : 0;
+          mat.emissive.setHex(match ? 0x38bdf8 : 0x000000);
+          mat.emissiveIntensity = match ? 0.4 : 0;
         }
       });
     });
   }, []);
 
-  // ============================================================
-  // 4. CHECK SOLVE STATUS
-  // ============================================================
-  const checkIsCubeSolved = useCallback(() => {
+  // ─────────────────────────────────────────────────────────
+  // 4. CHECK SOLVE
+  // ─────────────────────────────────────────────────────────
+  const checkSolved = useCallback(() => {
     const cubies = cubiesRef.current;
-    if (!cubies || cubies.length === 0) return false;
-
-    const faces = [
-      { normal: new THREE.Vector3(1, 0, 0) },  // +X Right
-      { normal: new THREE.Vector3(-1, 0, 0) }, // -X Left
-      { normal: new THREE.Vector3(0, 1, 0) },  // +Y Up
-      { normal: new THREE.Vector3(0, -1, 0) }, // -Y Down
-      { normal: new THREE.Vector3(0, 0, 1) },  // +Z Front
-      { normal: new THREE.Vector3(0, 0, -1) }, // -Z Back
+    if (!cubies?.length) return false;
+    const faceNormals = [
+      new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0),
+      new THREE.Vector3(0,1,0), new THREE.Vector3(0,-1,0),
+      new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1),
     ];
-
-    let allFacesUniform = true;
-
-    for (const face of faces) {
-      const surfaceCubies = cubies.filter((mesh) => {
-        if (face.normal.x !== 0) return Math.abs(mesh.position.x - face.normal.x) < 0.2;
-        if (face.normal.y !== 0) return Math.abs(mesh.position.y - face.normal.y) < 0.2;
-        if (face.normal.z !== 0) return Math.abs(mesh.position.z - face.normal.z) < 0.2;
-        return false;
+    const localNormals = [
+      new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0),
+      new THREE.Vector3(0,1,0), new THREE.Vector3(0,-1,0),
+      new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1),
+    ];
+    for (const fn of faceNormals) {
+      const side = cubies.filter(m => {
+        if (fn.x) return Math.abs(m.position.x - fn.x) < 0.3;
+        if (fn.y) return Math.abs(m.position.y - fn.y) < 0.3;
+        return Math.abs(m.position.z - fn.z) < 0.3;
       });
-
-      if (surfaceCubies.length !== 9) continue;
-
-      const colors = surfaceCubies.map((mesh) => {
-        let bestDot = -Infinity;
-        let bestMatColor = null;
-
-        const normals = [
-          new THREE.Vector3(1, 0, 0),
-          new THREE.Vector3(-1, 0, 0),
-          new THREE.Vector3(0, 1, 0),
-          new THREE.Vector3(0, -1, 0),
-          new THREE.Vector3(0, 0, 1),
-          new THREE.Vector3(0, 0, -1),
-        ];
-
-        normals.forEach((n, idx) => {
-          const worldNormal = n.clone().applyQuaternion(mesh.quaternion);
-          const dot = worldNormal.dot(face.normal);
-          if (dot > bestDot) {
-            bestDot = dot;
-            bestMatColor = mesh.material[idx].color.getHex();
-          }
+      if (side.length !== 9) continue;
+      const colors = side.map(m => {
+        let best = -Infinity, col = null;
+        localNormals.forEach((ln, i) => {
+          const wn = ln.clone().applyQuaternion(m.quaternion);
+          const d = wn.dot(fn);
+          if (d > best) { best = d; col = m.material[i].color.getHex(); }
         });
-
-        return bestMatColor;
+        return col;
       });
-
-      const firstColor = colors[0];
-      const isFaceSolved = colors.every((c) => c === firstColor);
-      if (!isFaceSolved) {
-        allFacesUniform = false;
-        break;
-      }
+      if (!colors.every(c => c === colors[0])) return false;
     }
-
-    if (allFacesUniform) {
-      handleStageVictory();
-      return true;
-    }
-    return false;
+    handleVictory();
+    return true;
   }, []);
 
+  // ─────────────────────────────────────────────────────────
+  // 5. CONFETTI
+  // ─────────────────────────────────────────────────────────
   const triggerConfetti = useCallback(() => {
-    const canvas = confettiCanvasRef.current;
-    if (!canvas) return;
+    const canvas = confettiCanvasRef.current; if (!canvas) return;
     const ctx = canvas.getContext('2d');
     canvas.width = canvas.clientWidth || window.innerWidth;
     canvas.height = canvas.clientHeight || window.innerHeight;
-
-    const colors = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#3b82f6'];
-    const particles = Array.from({ length: 60 }, () => ({
-      x: canvas.width / 2 + (Math.random() - 0.5) * 80,
-      y: canvas.height / 2 + (Math.random() - 0.5) * 80,
-      vx: (Math.random() - 0.5) * 11,
-      vy: (Math.random() - 1.2) * 11,
-      size: Math.random() * 5 + 4,
-      color: colors[Math.floor(Math.random() * colors.length)],
-      life: 1,
+    const cols = ['#6366f1','#10b981','#f59e0b','#ec4899','#3b82f6'];
+    const pts = Array.from({length:60}, () => ({
+      x: canvas.width/2+(Math.random()-.5)*80, y: canvas.height/2+(Math.random()-.5)*80,
+      vx:(Math.random()-.5)*11, vy:(Math.random()-1.2)*11,
+      sz:Math.random()*5+4, col:cols[Math.floor(Math.random()*cols.length)], life:1,
     }));
-
     if (confettiAnimRef.current) cancelAnimationFrame(confettiAnimRef.current);
-    const animate = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      let alive = false;
-      particles.forEach((p) => {
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.26;
-        p.life -= 0.016;
-        if (p.life > 0) {
-          alive = true;
-          ctx.globalAlpha = Math.max(p.life, 0);
-          ctx.fillStyle = p.color;
-          ctx.fillRect(p.x, p.y, p.size, p.size);
-        }
+    const draw = () => {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      let alive=false;
+      pts.forEach(p => {
+        p.x+=p.vx; p.y+=p.vy; p.vy+=0.26; p.life-=0.016;
+        if (p.life>0) { alive=true; ctx.globalAlpha=p.life; ctx.fillStyle=p.col; ctx.fillRect(p.x,p.y,p.sz,p.sz); }
       });
-      ctx.globalAlpha = 1;
-      if (alive) confettiAnimRef.current = requestAnimationFrame(animate);
-      else ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha=1;
+      if (alive) confettiAnimRef.current=requestAnimationFrame(draw);
     };
-    animate();
+    draw();
   }, []);
 
-  const handleStageVictory = useCallback(() => {
-    setStageSolved(true);
-    if (isSoundEnabled) playSuccessSound();
+  // ─────────────────────────────────────────────────────────
+  // 6. VICTORY
+  // ─────────────────────────────────────────────────────────
+  const handleVictory = useCallback(() => {
+    setStageSolved(true); stageSolvedRef.current = true;
+    if (isSoundOn) playSuccessSound();
     triggerConfetti();
+    highlightLayer(null);
 
     const timeSpent = Math.round((Date.now() - stageStartTime) / 1000);
-    const newTotalSolved = totalSolved + 1;
-    setTotalSolved(newTotalSolved);
+    const newTotal = totalSolved + 1;
+    setTotalSolved(newTotal);
 
-    // Adaptive Cognitive Performance Analysis (Slow & Gentle Scaling)
-    let speedAssessment = 'Steady & Mindful';
-    let feedback = 'Brilliant pattern completion!';
-    let nextDepth = scrambleDepth;
+    let rating='Steady'; let msg='Brilliant!'; let nextD = scrambleDepth;
+    if (timeSpent < 20)      { rating='Quick Reflexes'; msg='Fantastic speed!'; nextD=Math.min(scrambleDepth+1,8); }
+    else if (timeSpent <= 60){ rating='Good Pace'; msg='Great patience and focus!'; if(newTotal%2===0)nextD=Math.min(scrambleDepth+1,8); }
+    else                      { rating='Thoughtful'; msg='Wonderful effort — keeping it comfortable.'; }
 
-    if (timeSpent < 15) {
-      speedAssessment = 'Quick Reflexes';
-      feedback = 'Sharp spatial awareness! Gently adding challenge.';
-      nextDepth = Math.min(scrambleDepth + 1, 7);
-    } else if (timeSpent <= 45) {
-      speedAssessment = 'Comfortable Pace';
-      feedback = 'Terrific focus and problem-solving!';
-      if (newTotalSolved % 2 === 0) nextDepth = Math.min(scrambleDepth + 1, 7);
-    } else {
-      speedAssessment = 'Thoughtful Exploration';
-      feedback = 'Great patience! Keeping difficulty in your comfort zone.';
-      nextDepth = Math.max(1, scrambleDepth);
-    }
+    setFeedback(msg);
+    setPatientStats({ avgSolveTime: Math.round(((patientStats.avgSolveTime*(newTotal-1))+timeSpent)/newTotal), rating });
 
-    setCognitiveFeedback(feedback);
-    setPatientStats({
-      avgSolveTime: Math.round(((patientStats.avgSolveTime * (newTotalSolved - 1)) + timeSpent) / newTotalSolved),
-      performanceRating: speedAssessment,
+    const pts = 50 + Math.max(10, 40 - Math.floor(timeSpent/2));
+    const newCoins = coins + pts;
+    const newLevel = level + (nextD > scrambleDepth ? 1 : 0);
+    setCoins(newCoins); setLevel(newLevel);
+
+    if (syncProgress) syncProgress({
+      coins: newCoins, score: (user?.score||0)+pts,
+      gameStats: { rubiksCubeLevel: newLevel, rubikSolved: newTotal, lastPerformance: rating },
     });
+  }, [coins, level, scrambleDepth, stageStartTime, totalSolved, user, isSoundOn, syncProgress, triggerConfetti, patientStats.avgSolveTime, highlightLayer]);
 
-    const pointsEarned = 50 + Math.max(10, 40 - Math.floor(timeSpent / 2));
-    const newCoins = coins + pointsEarned;
-    const newLevel = level + (nextDepth > scrambleDepth ? 1 : 0);
-    setCoins(newCoins);
-    setLevel(newLevel);
-
-    if (syncProgress) {
-      syncProgress({
-        coins: newCoins,
-        score: (user?.score || 0) + pointsEarned,
-        gameStats: {
-          rubiksCubeLevel: newLevel,
-          rubikSolved: newTotalSolved,
-          lastPerformance: speedAssessment,
-        },
-      });
+  // ─────────────────────────────────────────────────────────
+  // 7. SCRAMBLE
+  // ─────────────────────────────────────────────────────────
+  const startPuzzle = useCallback(async (depth = null) => {
+    setStageSolved(false); stageSolvedRef.current = false;
+    setMoveCount(0); setHintMove(null); setActiveZone(null);
+    setStageStartTime(Date.now()); highlightLayer(null);
+    const d = depth !== null ? depth : scrambleDepth;
+    setScrambleDepth(d);
+    const pool = ['U',"U'",'D',"D'",'R',"R'",'L',"L'",'F',"F'"];
+    const hist = [];
+    for (let i = 0; i < d; i++) {
+      const mv = pool[Math.floor(Math.random()*pool.length)];
+      hist.push(mv);
+      await executeMove(mv, false);
+      await new Promise(r => setTimeout(r, 80));
     }
-  }, [coins, level, scrambleDepth, stageStartTime, totalSolved, user, isSoundEnabled, syncProgress, triggerConfetti, patientStats.avgSolveTime]);
-
-  // ============================================================
-  // 5. GENTLE SCRAMBLER (STARTS AT 1 MOVE FOR STAGE 1)
-  // ============================================================
-  const startNewPuzzle = useCallback(async (customDepth = null) => {
-    setStageSolved(false);
-    setMoveCount(0);
-    setHintMove(null);
-    setTargetedLayer(null);
-    highlightTargetLayer(null);
-    setStageStartTime(Date.now());
-
-    const depth = customDepth !== null ? customDepth : scrambleDepth;
-    setScrambleDepth(depth);
-
-    const movesPool = ['U', "U'", 'D', "D'", 'R', "R'", 'L', "L'", 'F', "F'"];
-    const history = [];
-
-    for (let i = 0; i < depth; i++) {
-      const randomMove = movesPool[Math.floor(Math.random() * movesPool.length)];
-      history.push(randomMove);
-      await executeMove(randomMove, false);
-      await new Promise((r) => setTimeout(r, 70));
-    }
-
-    scrambleHistoryRef.current = history;
-  }, [executeMove, scrambleDepth, highlightTargetLayer]);
+    scrambleHistRef.current = hist;
+    setFeedback(d===1 ? 'Stage 1: Just 1 move to solve — you can do it!' : `Scrambled with ${d} moves. Take your time!`);
+  }, [executeMove, scrambleDepth, highlightLayer]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      startNewPuzzle(1); // Level 1 starts with 1 gentle rotation move!
-    }, 600);
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => startPuzzle(1), 600);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (stageSolved) return;
-    const interval = setInterval(() => {
-      setElapsedTime(Math.round((Date.now() - stageStartTime) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
+    const iv = setInterval(() => setElapsedTime(Math.round((Date.now()-stageStartTime)/1000)), 1000);
+    return () => clearInterval(iv);
   }, [stageStartTime, stageSolved]);
 
-  const provideGentleHint = () => {
+  const giveHint = () => {
     if (stageSolved) return;
-    if (isSoundEnabled) playHintSound();
-
-    const inverseMap = {
-      'U': "U'", "U'": 'U',
-      'D': "D'", "D'": 'D',
-      'R': "R'", "R'": 'R',
-      'L': "L'", "L'": 'L',
-      'F': "F'", "F'": 'F',
-      'B': "B'", "B'": 'B',
-    };
-
-    if (scrambleHistoryRef.current.length > 0) {
-      const last = scrambleHistoryRef.current[scrambleHistoryRef.current.length - 1];
-      const recommended = inverseMap[last] || 'U';
-      setHintMove(recommended);
-      setCognitiveFeedback(`Gentle Hint: Rotate layer "${recommended}"`);
-    } else {
-      setHintMove('R');
-      setCognitiveFeedback('Try rotating Right (R) to align matching colors!');
+    if (isSoundOn) playHintSound();
+    const inv = {'U':"U'","U'":'U','D':"D'","D'":'D','R':"R'","R'":'R','L':"L'","L'":'L','F':"F'","F'":'F','B':"B'","B'":'B'};
+    if (scrambleHistRef.current.length > 0) {
+      const last = scrambleHistRef.current[scrambleHistRef.current.length-1];
+      const r = inv[last]||'U';
+      setHintMove(r); setFeedback(`Gentle hint: Try move "${r}"`);
     }
   };
 
-  // ============================================================
-  // 6. DUAL-HAND GESTURE RECOGNITION (TWO HANDS + SKELETON + RAYCASTING)
-  // ============================================================
-  useEffect(() => {
-    let isCancelled = false;
-
-    const initDetector = async () => {
-      let detector = null;
-      try {
-        detector = await handPoseDetection.createDetector(
-          handPoseDetection.SupportedModels.MediaPipeHands,
-          {
-            runtime: 'mediapipe',
-            solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
-            modelType: 'lite',
-            maxHands: 2,
-          }
-        );
-      } catch (err) {
-        console.warn('MediaPipe CDN load failed, trying tfjs backend:', err);
-      }
-
-      if (!detector) {
-        try {
-          await tf.ready();
-          detector = await handPoseDetection.createDetector(
-            handPoseDetection.SupportedModels.MediaPipeHands,
-            { runtime: 'tfjs', modelType: 'lite', maxHands: 2 }
-          );
-        } catch (tfErr) {
-          console.warn('TFJS default backend failed, trying CPU:', tfErr);
-          try {
-            await tf.setBackend('cpu');
-            await tf.ready();
-            detector = await handPoseDetection.createDetector(
-              handPoseDetection.SupportedModels.MediaPipeHands,
-              { runtime: 'tfjs', modelType: 'lite', maxHands: 2 }
-            );
-          } catch (cpuErr) {
-            console.error('All detector runtimes failed:', cpuErr);
-          }
-        }
-      }
-
-      if (detector && !isCancelled) {
-        detectorRef.current = detector;
-        setIsDetectorReady(true);
-        setIsCameraActive(true);
-      }
-    };
-
-    initDetector();
-    return () => { isCancelled = true; };
-  }, []);
-
-  // Keep active callback references fresh without restarting the detection loop
+  // ─────────────────────────────────────────────────────────
+  // 8. UPDATE CALLBACK REFS (no loop restarts)
+  // ─────────────────────────────────────────────────────────
   useEffect(() => {
     executeMoveRef.current = executeMove;
-    highlightTargetLayerRef.current = highlightTargetLayer;
+    highlightRef.current   = highlightLayer;
     stageSolvedRef.current = stageSolved;
   });
 
-  // Universal Keypoint Normalizer — cached per-hand
-  const normalizeHand = useCallback((keypoints, vw, vh) => {
-    return keypoints.map((kp) => {
-      if (!kp) return { x: 0, y: 0 };
-      const isNorm = Math.abs(kp.x) <= 1.05 && Math.abs(kp.y) <= 1.05;
-      return {
-        x: isNorm ? kp.x * 640 : (kp.x / (vw || 640)) * 640,
-        y: isNorm ? kp.y * 480 : (kp.y / (vh || 480)) * 480,
-      };
-    });
+  // ─────────────────────────────────────────────────────────
+  // 9. DETECTOR INIT
+  // ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let det = null;
+      try {
+        det = await handPoseDetection.createDetector(
+          handPoseDetection.SupportedModels.MediaPipeHands,
+          { runtime:'mediapipe', solutionPath:'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240', modelType:'lite', maxHands:2 }
+        );
+      } catch {
+        try { await tf.ready(); det = await handPoseDetection.createDetector(handPoseDetection.SupportedModels.MediaPipeHands,{runtime:'tfjs',modelType:'lite',maxHands:2}); }
+        catch { try { await tf.setBackend('cpu'); await tf.ready(); det = await handPoseDetection.createDetector(handPoseDetection.SupportedModels.MediaPipeHands,{runtime:'tfjs',modelType:'lite',maxHands:2}); } catch {} }
+      }
+      if (!cancelled && det) { detectorRef.current = det; setDetectorReady(true); }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  // Batched skeleton renderer — single path per operation type
-  const drawHandSkeleton = useCallback((ctx, normPts, color) => {
-    // Draw all bones in one stroke call
-    ctx.beginPath();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    HAND_CONNECTIONS.forEach(([i, j]) => {
-      const p1 = normPts[i];
-      const p2 = normPts[j];
-      if (p1 && p2) {
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-      }
-    });
-    ctx.stroke();
-
-    // Draw all joints in one fill call
-    ctx.beginPath();
-    ctx.fillStyle = color;
-    normPts.forEach((p, idx) => {
-      const r = idx === 8 || idx === 4 ? 5 : 3;
-      ctx.moveTo(p.x + r, p.y);
-      ctx.arc(p.x, p.y, r, 0, 2 * Math.PI);
-    });
-    ctx.fill();
-
-    // Highlight fingertips (index=8, thumb=4) with white
-    ctx.beginPath();
-    ctx.fillStyle = '#ffffff';
-    [4, 8].forEach((idx) => {
-      const p = normPts[idx];
-      if (p) {
-        ctx.moveTo(p.x + 4, p.y);
-        ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
-      }
-    });
-    ctx.fill();
-  }, []);
-
-  // ============================================================
-  // PERSISTENT DUAL-HAND DETECTION ENGINE (Paced at ~30 FPS, Zero Jitter)
-  // ============================================================
+  // ─────────────────────────────────────────────────────────
+  // 10. GESTURE ENGINE — 320×240 paced at ~20 FPS
+  // ─────────────────────────────────────────────────────────
   useEffect(() => {
     let alive = true;
-    let timeoutId = null;
+    let tid   = null;
+
+    // Normalise keypoint from MediaPipe (0..1) or pixel coords to 0..1
+    const norm = (kp, vw, vh) => {
+      if (!kp) return { x:0.5, y:0.5 };
+      const isN = Math.abs(kp.x) <= 1.1 && Math.abs(kp.y) <= 1.1;
+      return { x: isN ? kp.x : kp.x/vw, y: isN ? kp.y : kp.y/vh };
+    };
+
+    // Draw minimal skeleton on canvas (batched)
+    const drawSkeleton = (ctx, pts, color, W, H) => {
+      ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+      HAND_CONNECTIONS.forEach(([a,b]) => {
+        const p1=pts[a], p2=pts[b];
+        if(p1&&p2){ ctx.moveTo(p1.x*W,p1.y*H); ctx.lineTo(p2.x*W,p2.y*H); }
+      });
+      ctx.stroke();
+      // key joints
+      ctx.beginPath(); ctx.fillStyle = color;
+      [0,4,8].forEach(i => { const p=pts[i]; if(p){ ctx.moveTo(p.x*W+5,p.y*H); ctx.arc(p.x*W,p.y*H,5,0,Math.PI*2); } });
+      ctx.fill();
+      ctx.beginPath(); ctx.fillStyle='#fff';
+      [4,8].forEach(i => { const p=pts[i]; if(p){ ctx.moveTo(p.x*W+3,p.y*H); ctx.arc(p.x*W,p.y*H,3,0,Math.PI*2); } });
+      ctx.fill();
+    };
+
+    // Draw zone guide on the canvas
+    const drawZoneGuide = (ctx, W, H, activeZoneName) => {
+      const zones = [
+        { label:'U – Top',    x:0,    y:0,    w:1,    h:0.28, color:'rgba(99,102,241,0.18)' },
+        { label:'L – Left',   x:0,    y:0.28, w:0.38, h:0.44, color:'rgba(16,185,129,0.18)' },
+        { label:'F – Front',  x:0.38, y:0.28, w:0.24, h:0.44, color:'rgba(245,158,11,0.18)' },
+        { label:'R – Right',  x:0.62, y:0.28, w:0.38, h:0.44, color:'rgba(239,68,68,0.18)' },
+        { label:'D – Bottom', x:0,    y:0.72, w:1,    h:0.28, color:'rgba(139,92,246,0.18)' },
+      ];
+      zones.forEach(z => {
+        const isActive = activeZoneName && z.label === activeZoneName;
+        ctx.fillStyle = isActive ? z.color.replace('0.18','0.45') : z.color;
+        ctx.fillRect(z.x*W, z.y*H, z.w*W, z.h*H);
+        ctx.strokeStyle = isActive ? '#38bdf8' : 'rgba(255,255,255,0.12)';
+        ctx.lineWidth = isActive ? 2 : 1;
+        ctx.strokeRect(z.x*W, z.y*H, z.w*W, z.h*H);
+        ctx.fillStyle = isActive ? '#38bdf8' : 'rgba(255,255,255,0.5)';
+        ctx.font = `bold ${Math.round(H*0.045)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(z.label, (z.x+z.w/2)*W, (z.y+z.h/2)*H+5);
+      });
+      ctx.textAlign = 'left';
+    };
 
     const detect = async () => {
       if (!alive) return;
-      const startTime = performance.now();
+      const t0 = performance.now();
 
-      const video = webcamRef.current?.video;
+      const video    = webcamRef.current?.video;
       const detector = detectorRef.current;
+      const canvas   = canvasRef.current;
 
-      if (!detector || !video || video.readyState < 2 || !video.videoWidth) {
-        if (alive) timeoutId = setTimeout(detect, 80);
+      if (!detector || !video || video.readyState < 2 || !video.videoWidth || !canvas) {
+        tid = setTimeout(detect, 100);
         return;
       }
+
+      // Canvas size = 320×240 for speed
+      const W = 320, H = 240;
+      if (canvas.width !== W) canvas.width = W;
+      if (canvas.height !== H) canvas.height = H;
+
+      let ctx2 = ctxRef.current;
+      if (!ctx2) { ctx2 = canvas.getContext('2d', {alpha:true}); ctxRef.current = ctx2; }
 
       try {
         const hands = await detector.estimateHands(video, { flipHorizontal: true });
         if (!alive) return;
 
-        const canvas = previewCanvasRef.current;
-        if (!canvas) {
-          if (alive) timeoutId = setTimeout(detect, 16);
-          return;
-        }
-
-        if (canvas.width !== 640) canvas.width = 640;
-        if (canvas.height !== 480) canvas.height = 480;
-
-        let ctx = previewCtxRef.current;
-        if (!ctx) {
-          ctx = canvas.getContext('2d', { alpha: true });
-          previewCtxRef.current = ctx;
-        }
-        ctx.clearRect(0, 0, 640, 480);
-
+        ctx2.clearRect(0, 0, W, H);
+        const now = performance.now();
         const vw = video.videoWidth || 640;
         const vh = video.videoHeight || 480;
-        const now = performance.now();
-        const handCount = hands ? hands.length : 0;
+        const count = hands?.length || 0;
 
-        // Throttle React state update for hand count
-        if (now - lastCountUpdateRef.current > 300) {
-          lastCountUpdateRef.current = now;
-          setDetectedHandCount(handCount);
+        // Throttle React state for hand count
+        if (now - lastCountRef.current > 400) { lastCountRef.current = now; setHandCount(count); }
+
+        // Identify LEFT vs RIGHT hand
+        let leftHand  = null;
+        let rightHand = null;
+        if (count === 1) {
+          // Use handedness label if available, else use x position
+          const h = hands[0];
+          const hl = h.handedness?.toLowerCase?.();
+          // In mirrored video left→right hand
+          if (hl === 'left' || hl === 'right') {
+            // MediaPipe: 'Left' in original = patient's right after mirror flip
+            if (hl === 'right') leftHand = h; else rightHand = h;
+          } else {
+            // Fallback: wrist x < 0.5 → left side of mirrored image → patient's right
+            const wx = norm(h.keypoints[0], vw, vh).x;
+            if (wx < 0.5) rightHand = h; else leftHand = h;
+          }
+        } else if (count >= 2) {
+          hands.forEach(h => {
+            const hl = h.handedness?.toLowerCase?.();
+            if (hl === 'right') leftHand  = h;
+            else if (hl === 'left') rightHand = h;
+          });
+          // Fallback if handedness missing
+          if (!leftHand && !rightHand) {
+            const sorted = [...hands].sort((a,b)=> norm(a.keypoints[0],vw,vh).x - norm(b.keypoints[0],vw,vh).x);
+            rightHand = sorted[0]; leftHand = sorted[1];
+          }
         }
 
-        if (handCount > 0) {
-          // Normalize all keypoints once per hand
-          const normalizedHands = hands.map((h) => ({
-            pts: normalizeHand(h.keypoints, vw, vh),
-            raw: h,
-          }));
-
-          let orbitData = null;
-          let pointerData = null;
-
-          if (normalizedHands.length >= 2) {
-            // Sort by wrist X: leftmost hand is Orbit, rightmost is Pointer
-            normalizedHands.sort((a, b) => a.pts[0].x - b.pts[0].x);
-            orbitData = normalizedHands[0];
-            pointerData = normalizedHands[1];
-
-            persistentHandsRef.current.orbit = { x: orbitData.pts[9].x, y: orbitData.pts[9].y, lastSeen: now };
-            persistentHandsRef.current.pointer = { x: pointerData.pts[9].x, y: pointerData.pts[9].y, lastSeen: now };
-          } else {
-            // Single hand detected: identify role using spatial proximity
-            const single = normalizedHands[0];
-            const palmX = single.pts[9].x;
-            const palmY = single.pts[9].y;
-
-            const distToOrbit = Math.hypot(palmX - persistentHandsRef.current.orbit.x, palmY - persistentHandsRef.current.orbit.y);
-            const distToPointer = Math.hypot(palmX - persistentHandsRef.current.pointer.x, palmY - persistentHandsRef.current.pointer.y);
-
-            // Left side (< 320) or closer to orbit -> Orbit Hand; Right side (>= 320) or closer to pointer -> Pointer Hand
-            const isPointer = distToPointer < distToOrbit || palmX >= 320;
-
-            if (isPointer) {
-              pointerData = single;
-              persistentHandsRef.current.pointer = { x: palmX, y: palmY, lastSeen: now };
-            } else {
-              orbitData = single;
-              persistentHandsRef.current.orbit = { x: palmX, y: palmY, lastSeen: now };
-            }
+        // ── LEFT HAND = Orbit Cube ────────────────────────
+        if (leftHand) {
+          const kps = leftHand.keypoints.map(k => norm(k, vw, vh));
+          drawSkeleton(ctx2, kps, '#06b6d4', W, H);
+          const palm = kps[9];
+          const sm = leftSmoother.current.filter(palm.x, palm.y);
+          if (prevLeftRef.current && !isAnimRef.current) {
+            const dx = (sm.x - prevLeftRef.current.x) * W;
+            const dy = (sm.y - prevLeftRef.current.y) * H;
+            const DEAD = 1.5; // px dead-zone to ignore tiny jitter
+            if (Math.abs(dx) > DEAD) targetRotRef.current.y += dx * 0.018;
+            if (Math.abs(dy) > DEAD) targetRotRef.current.x += dy * 0.018;
           }
-
-          // ── 1. ORBIT HAND (Cyan Skeleton) ─────────────────
-          if (orbitData) {
-            const pts = orbitData.pts;
-            const rawPt = pts[9];
-            const smoothed = orbitHandSmoothRef.current.filter(rawPt.x, rawPt.y);
-
-            drawHandSkeleton(ctx, pts, '#06b6d4');
-
-            // Glowing Orbit Beacon on wrist
-            const wrist = pts[0];
-            if (wrist) {
-              ctx.beginPath();
-              ctx.arc(wrist.x, wrist.y, 8, 0, 2 * Math.PI);
-              ctx.fillStyle = '#06b6d4';
-              ctx.fill();
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 2;
-              ctx.stroke();
-            }
-
-            if (prevOrbitPosRef.current && targetRotationRef.current) {
-              const dx = smoothed.x - prevOrbitPosRef.current.x;
-              const dy = smoothed.y - prevOrbitPosRef.current.y;
-              if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-                targetRotationRef.current.y += dx * 0.012;
-                targetRotationRef.current.x += dy * 0.012;
-              }
-            }
-            prevOrbitPosRef.current = { x: smoothed.x, y: smoothed.y };
-          } else {
-            // Keep last orbit state during 400ms grace period so single-frame drops don't jump
-            if (now - persistentHandsRef.current.orbit.lastSeen > 400) {
-              prevOrbitPosRef.current = null;
-              orbitHandSmoothRef.current.reset();
-            }
-          }
-
-          // ── 2. POINTER & TURNER HAND (Emerald / Amber) ───
-          if (pointerData) {
-            const pts = pointerData.pts;
-            const indexPt = pts[8];
-            const thumbPt = pts[4];
-            const smoothed = pointerHandSmoothRef.current.filter(indexPt.x, indexPt.y);
-
-            const pinchDist = Math.hypot(thumbPt.x - indexPt.x, thumbPt.y - indexPt.y);
-            const pinchingNow = pinchDist < 46;
-
-            if (isPinchingRef.current !== pinchingNow) {
-              isPinchingRef.current = pinchingNow;
-              setIsPinching(pinchingNow);
-            }
-
-            drawHandSkeleton(ctx, pts, pinchingNow ? '#f59e0b' : '#10b981');
-
-            // Crosshair on index fingertip
-            ctx.beginPath();
-            ctx.arc(smoothed.x, smoothed.y, pinchingNow ? 16 : 10, 0, 2 * Math.PI);
-            ctx.strokeStyle = pinchingNow ? '#f59e0b' : '#10b981';
-            ctx.lineWidth = 3;
-            ctx.stroke();
-
-            // Raycast into Three.js 3D space
-            const normX = (smoothed.x / 640) * 2 - 1;
-            const normY = -((smoothed.y / 480) * 2 - 1);
-
-            if (cameraRef.current && cubiesRef.current) {
-              raycasterRef.current.setFromCamera(new THREE.Vector2(normX, normY), cameraRef.current);
-              const hits = raycasterRef.current.intersectObjects(cubiesRef.current);
-
-              if (hits && hits.length > 0) {
-                const hit = hits[0];
-                const cubiePos = hit.object.position;
-                const normal = hit.face.normal.clone().applyQuaternion(hit.object.quaternion);
-
-                let targetedAxis = 'y', layerIdx = 1, layerName = 'U (Top)';
-
-                if (Math.abs(normal.x) > 0.6) {
-                  targetedAxis = 'x';
-                  layerIdx = Math.round(cubiePos.x);
-                  layerName = layerIdx === 1 ? 'R (Right)' : layerIdx === -1 ? 'L (Left)' : 'Middle X';
-                } else if (Math.abs(normal.y) > 0.6) {
-                  targetedAxis = 'y';
-                  layerIdx = Math.round(cubiePos.y);
-                  layerName = layerIdx === 1 ? 'U (Top)' : layerIdx === -1 ? 'D (Bottom)' : 'Middle Y';
-                } else {
-                  targetedAxis = 'z';
-                  layerIdx = Math.round(cubiePos.z);
-                  layerName = layerIdx === 1 ? 'F (Front)' : layerIdx === -1 ? 'B (Back)' : 'Middle Z';
-                }
-
-                const layerInfo = { axis: targetedAxis, layerIndex: layerIdx, name: layerName };
-                if (targetedLayerRef.current?.name !== layerName) {
-                  targetedLayerRef.current = layerInfo;
-                  setTargetedLayer(layerInfo);
-                  if (highlightTargetLayerRef.current) {
-                    highlightTargetLayerRef.current(layerInfo);
-                  }
-                }
-
-                // Pinch & swipe layer rotation
-                const ct = Date.now();
-                if (pinchingNow) {
-                  if (!pinchStartPosRef.current) {
-                    pinchStartPosRef.current = { x: smoothed.x, y: smoothed.y };
-                  } else if (!gestureLockRef.current && ct - lastGestureTimeRef.current > 420 && !isAnimatingRef.current) {
-                    const dragX = smoothed.x - pinchStartPosRef.current.x;
-                    const dragY = smoothed.y - pinchStartPosRef.current.y;
-
-                    if (Math.abs(dragX) > 24 && Math.abs(dragX) > Math.abs(dragY)) {
-                      gestureLockRef.current = true;
-                      lastGestureTimeRef.current = ct;
-                      pinchStartPosRef.current = null;
-                      if (executeMoveRef.current) {
-                        executeMoveRef.current(dragX > 0
-                          ? (layerInfo.axis === 'y' && layerInfo.layerIndex === -1 ? 'D' : 'U')
-                          : (layerInfo.axis === 'y' && layerInfo.layerIndex === -1 ? "D'" : "U'"));
-                      }
-                    } else if (Math.abs(dragY) > 24) {
-                      gestureLockRef.current = true;
-                      lastGestureTimeRef.current = ct;
-                      pinchStartPosRef.current = null;
-                      if (executeMoveRef.current) {
-                        executeMoveRef.current(dragY > 0
-                          ? (layerInfo.axis === 'x' && layerInfo.layerIndex === -1 ? 'L' : 'R')
-                          : (layerInfo.axis === 'x' && layerInfo.layerIndex === -1 ? "L'" : "R'"));
-                      }
-                    }
-                  }
-                } else {
-                  pinchStartPosRef.current = null;
-                  gestureLockRef.current = false;
-                }
-              } else {
-                if (targetedLayerRef.current !== null) {
-                  targetedLayerRef.current = null;
-                  setTargetedLayer(null);
-                  if (highlightTargetLayerRef.current) highlightTargetLayerRef.current(null);
-                }
-              }
-            }
-          } else {
-            // Keep pointer target during 400ms grace period so targeting does not flicker off
-            if (now - persistentHandsRef.current.pointer.lastSeen > 400) {
-              if (targetedLayerRef.current !== null) {
-                targetedLayerRef.current = null;
-                setTargetedLayer(null);
-                if (highlightTargetLayerRef.current) highlightTargetLayerRef.current(null);
-              }
-              pointerHandSmoothRef.current.reset();
-              pinchStartPosRef.current = null;
-            }
-          }
+          prevLeftRef.current = { x: sm.x, y: sm.y };
+          // Label
+          ctx2.fillStyle='rgba(6,182,212,0.85)'; ctx2.font=`bold ${Math.round(H*0.048)}px sans-serif`;
+          ctx2.fillText('◀ ORBIT', Math.round(kps[0].x*W)+8, Math.round(kps[0].y*H)-8);
         } else {
-          // No hands in view: apply 400ms grace period before clearing
-          if (now - persistentHandsRef.current.orbit.lastSeen > 400) {
-            prevOrbitPosRef.current = null;
-            orbitHandSmoothRef.current.reset();
-          }
-          if (now - persistentHandsRef.current.pointer.lastSeen > 400) {
-            if (targetedLayerRef.current !== null) {
-              targetedLayerRef.current = null;
-              setTargetedLayer(null);
-              if (highlightTargetLayerRef.current) highlightTargetLayerRef.current(null);
-            }
-            pointerHandSmoothRef.current.reset();
-            pinchStartPosRef.current = null;
-          }
+          leftSmoother.current.reset();
+          prevLeftRef.current = null;
         }
-      } catch (e) {
-        // Continue detection loop gracefully
+
+        // ── RIGHT HAND = Zone + Swipe ─────────────────────
+        if (rightHand) {
+          const kps = rightHand.keypoints.map(k => norm(k, vw, vh));
+          const indexTip = kps[8];
+          const sm = rightSmoother.current.filter(indexTip.x, indexTip.y);
+
+          // Determine zone from smoothed index tip
+          const zone = getLayerFromZone(sm.x, sm.y);
+
+          // Update zone display + highlight
+          if (!currentZoneRef.current || currentZoneRef.current.name !== zone.name) {
+            currentZoneRef.current = zone;
+            setActiveZone(zone.name);
+            if (highlightRef.current) highlightRef.current(zone);
+          }
+
+          // Draw zone guide
+          drawZoneGuide(ctx2, W, H, zone.name);
+          drawSkeleton(ctx2, kps, '#10b981', W, H);
+
+          // Swipe detection
+          const ct = Date.now();
+          if (!swipeStartRef.current) {
+            swipeStartRef.current = { x: sm.x, y: sm.y, t: ct };
+            swipeLockRef.current = false;
+          } else if (!swipeLockRef.current && ct - lastMoveRef.current > 500 && !isAnimRef.current && !stageSolvedRef.current) {
+            const dragX = (sm.x - swipeStartRef.current.x) * W;
+            const dragY = (sm.y - swipeStartRef.current.y) * H;
+            const SWIPE = 28; // px minimum swipe
+            const move = zone.move;
+
+            if (Math.abs(dragX) > SWIPE && Math.abs(dragX) > Math.abs(dragY)) {
+              swipeLockRef.current = true;
+              lastMoveRef.current = ct;
+              swipeStartRef.current = null;
+              const notation = dragX < 0 ? move.cw : move.ccw;
+              setSwipeDir(dragX < 0 ? '← CW' : '→ CCW');
+              setTimeout(() => setSwipeDir(null), 800);
+              if (executeMoveRef.current) executeMoveRef.current(notation);
+            } else if (Math.abs(dragY) > SWIPE && Math.abs(dragY) > Math.abs(dragX)) {
+              swipeLockRef.current = true;
+              lastMoveRef.current = ct;
+              swipeStartRef.current = null;
+              const notation = dragY < 0 ? move.cw : move.ccw;
+              setSwipeDir(dragY < 0 ? '↑ CW' : '↓ CCW');
+              setTimeout(() => setSwipeDir(null), 800);
+              if (executeMoveRef.current) executeMoveRef.current(notation);
+            }
+          }
+
+          // Reset swipe start if hand stayed still for > 600ms
+          if (swipeStartRef.current && ct - swipeStartRef.current.t > 600) {
+            swipeStartRef.current = { x: sm.x, y: sm.y, t: ct };
+          }
+
+          ctx2.fillStyle='rgba(16,185,129,0.85)'; ctx2.font=`bold ${Math.round(H*0.048)}px sans-serif`;
+          ctx2.textAlign='right';
+          ctx2.fillText('TURN ▶', Math.round(kps[0].x*W)-8, Math.round(kps[0].y*H)-8);
+          ctx2.textAlign='left';
+        } else {
+          rightSmoother.current.reset();
+          swipeStartRef.current = null;
+          swipeLockRef.current  = false;
+          currentZoneRef.current = null;
+          setActiveZone(null);
+          if (highlightRef.current) highlightRef.current(null);
+          // Draw zone guide even without hand (greyed out)
+          drawZoneGuide(ctx2, W, H, null);
+        }
+
+        if (!leftHand && !rightHand) {
+          drawZoneGuide(ctx2, W, H, null);
+        }
+      } catch {
+        /* continue */
       }
 
-      // Smooth pacing: throttle detection to ~30 FPS, giving CPU & GPU ample time for 60 FPS Three.js rendering
-      const elapsed = performance.now() - startTime;
-      const delay = Math.max(16, 33 - elapsed);
-      if (alive) timeoutId = setTimeout(detect, delay);
+      const elapsed = performance.now() - t0;
+      // Target ~20 FPS (50ms) — leaves plenty of CPU for Three.js 60 FPS
+      const delay = Math.max(10, 50 - elapsed);
+      if (alive) tid = setTimeout(detect, delay);
     };
 
     detect();
-    return () => {
-      alive = false;
-      if (timeoutId) clearTimeout(timeoutId);
-    };
-  }, [normalizeHand, drawHandSkeleton]);
+    return () => { alive = false; if (tid) clearTimeout(tid); };
+  }, []); // stable deps — uses refs throughout
 
-  // ============================================================
-  // 7. MOUSE DRAG FALLBACK FOR ORBITING CUBE
-  // ============================================================
-  const handleMouseDown = (e) => {
-    isDraggingCubeRef.current = true;
-    previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
+  // ─────────────────────────────────────────────────────────
+  // MOUSE ORBIT FALLBACK
+  // ─────────────────────────────────────────────────────────
+  const onMouseDown = e => { isDraggingRef.current=true; prevMouseRef.current={x:e.clientX,y:e.clientY}; };
+  const onMouseMove = e => {
+    if (!isDraggingRef.current) return;
+    const dx=e.clientX-prevMouseRef.current.x; const dy=e.clientY-prevMouseRef.current.y;
+    targetRotRef.current.y += dx*0.008; targetRotRef.current.x += dy*0.008;
+    prevMouseRef.current={x:e.clientX,y:e.clientY};
   };
+  const onMouseUp = () => { isDraggingRef.current=false; };
+  const resetView = () => { targetRotRef.current={x:0.4,y:0.6}; };
 
-  const handleMouseMove = (e) => {
-    if (!isDraggingCubeRef.current || !cubeGroupRef.current) return;
-    const deltaX = e.clientX - previousMousePositionRef.current.x;
-    const deltaY = e.clientY - previousMousePositionRef.current.y;
+  const fmt = s => { const m=Math.floor(s/60); return `${m}:${s%60<10?'0':''}${s%60}`; };
 
-    if (targetRotationRef.current) {
-      targetRotationRef.current.y += deltaX * 0.008;
-      targetRotationRef.current.x += deltaY * 0.008;
-    }
-
-    previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleMouseUp = () => {
-    isDraggingCubeRef.current = false;
-  };
-
-  const resetCubeView = () => {
-    if (cubeGroupRef.current) {
-      cubeGroupRef.current.rotation.set(0, 0, 0);
-      if (targetRotationRef.current) {
-        targetRotationRef.current = { x: 0, y: 0 };
-      }
-    }
-  };
-
-  const formatTime = (secs) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
+  // ─────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col select-none relative overflow-hidden">
-      {/* Fullscreen Celebration Confetti Canvas */}
-      <canvas
-        ref={confettiCanvasRef}
-        className="absolute inset-0 pointer-events-none z-50 w-full h-full"
-      />
+      {/* Confetti */}
+      <canvas ref={confettiCanvasRef} className="absolute inset-0 pointer-events-none z-50 w-full h-full" />
 
-      {/* ============================================================ */}
-      {/* TOP HEADER & STATS                                           */}
-      {/* ============================================================ */}
-      <header className="bg-slate-800/80 backdrop-blur-md border-b border-slate-700/60 px-6 py-3 flex items-center justify-between z-30">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/games')}
-            className="p-2.5 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-sm font-semibold"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Games</span>
+      {/* How To Play Modal */}
+      {showHowTo && <HowToPlayModal onClose={() => setShowHowTo(false)} />}
+
+      {/* ── HEADER ── */}
+      <header className="bg-slate-800/80 backdrop-blur-md border-b border-slate-700/60 px-4 py-3 flex items-center justify-between z-30">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate('/games')} className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 flex items-center gap-1 text-sm font-semibold">
+            <ArrowLeft className="w-4 h-4" /> Games
           </button>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-black bg-gradient-to-r from-amber-400 via-rose-400 to-indigo-400 bg-clip-text text-transparent">
-                Gesture Rubik's Cube
-              </h1>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                Cognitive Stage {level}
-              </span>
+              <h1 className="text-lg font-black bg-gradient-to-r from-amber-400 via-rose-400 to-indigo-400 bg-clip-text text-transparent">Gesture Rubik's Cube</h1>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Stage {level}</span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Dual-Hand Vision: Hand 1 Orbits • Hand 2 Points & Pinches to Turn
+            <p className="text-[11px] text-slate-400">
+              Left hand ← Orbit &nbsp;|&nbsp; Right hand → Select zone &amp; Swipe to turn
             </p>
           </div>
         </div>
-
-        {/* Stats & Accessibility Badges */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
-            <Trophy className="w-3.5 h-3.5 text-amber-400" />
-            <span>Level {level}</span>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
+            <Trophy className="w-3.5 h-3.5 text-amber-400" /> Lv {level}
           </div>
-
-          <div className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
-            <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
-            <span>{coins} Coins</span>
+          <div className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
+            <Sparkles className="w-3.5 h-3.5 text-yellow-400" /> {coins}
           </div>
-
-          <div className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
-            <span>⏱️ {formatTime(elapsedTime)}</span>
+          <div className="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
+            ⏱ {fmt(elapsedTime)}
           </div>
-
-          <button
-            onClick={() => setIsSoundEnabled(!isSoundEnabled)}
-            className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 transition-colors"
-            title="Toggle Sound"
-          >
-            {isSoundEnabled ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
+          <button onClick={() => setShowHowTo(true)} className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300" title="How to play">
+            <Hand className="w-4 h-4 text-indigo-400" />
+          </button>
+          <button onClick={() => setIsSoundOn(!isSoundOn)} className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300">
+            {isSoundOn ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
           </button>
         </div>
       </header>
 
-      {/* ============================================================ */}
-      {/* 3D CUBE WORKSPACE & CONTROLS                                 */}
-      {/* ============================================================ */}
+      {/* ── MAIN ── */}
       <div className="flex-1 flex flex-col lg:flex-row relative overflow-hidden">
-        
-        {/* Left / Center: HD 3D Three.js Interactive Cube Canvas */}
+
+        {/* 3D Cube Area */}
         <div
           ref={mountRef}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          className="flex-1 w-full h-[58vh] lg:h-auto cursor-grab active:cursor-grabbing relative flex items-center justify-center bg-gradient-to-b from-slate-900 via-slate-900/95 to-slate-950"
+          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+          className="flex-1 w-full h-[55vh] lg:h-auto cursor-grab active:cursor-grabbing relative bg-gradient-to-b from-slate-900 to-slate-950"
         >
-          {/* Active Target Banner Over 3D Cube */}
-          <div className="absolute top-4 left-4 z-20 flex flex-wrap gap-2 items-center">
-            <button
-              onClick={resetCubeView}
-              className="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 text-xs font-bold text-slate-300 flex items-center gap-1.5 shadow-md"
-            >
-              <Compass className="w-3.5 h-3.5 text-indigo-400" />
-              Reset View
+          {/* Overlay controls */}
+          <div className="absolute top-3 left-3 z-20 flex flex-wrap gap-2">
+            <button onClick={resetView} className="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 text-xs font-bold text-slate-300 flex items-center gap-1.5">
+              <Compass className="w-3.5 h-3.5 text-indigo-400" /> Reset View
             </button>
-            <button
-              onClick={provideGentleHint}
-              className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-bold text-amber-300 flex items-center gap-1.5 shadow-md"
-            >
-              <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-              Cognitive Hint
+            <button onClick={giveHint} className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-bold text-amber-300 flex items-center gap-1.5">
+              <Lightbulb className="w-3.5 h-3.5 text-amber-400" /> Hint
             </button>
+          </div>
 
-            {targetedLayer && (
-              <div className="px-3 py-1.5 rounded-xl bg-sky-500/20 border border-sky-500/40 text-xs font-bold text-sky-300 flex items-center gap-1.5 animate-pulse">
-                <span>🎯 Pointing at: <strong>{targetedLayer.name}</strong></span>
-                {isPinching && <span className="text-amber-400 font-black">• PINCHED (Swipe to turn)</span>}
+          {/* Active zone + swipe indicator */}
+          <div className="absolute top-3 right-3 z-20 flex flex-col gap-2 items-end">
+            {activeZone && (
+              <div className="px-3 py-1.5 rounded-xl bg-sky-500/20 border border-sky-500/40 text-xs font-bold text-sky-300 animate-pulse">
+                🎯 {activeZone}
+              </div>
+            )}
+            {swipeDir && (
+              <div className="px-3 py-1.5 rounded-xl bg-emerald-500/30 border border-emerald-500/60 text-sm font-black text-emerald-300">
+                {swipeDir}
+              </div>
+            )}
+            {hintMove && (
+              <div className="px-3 py-1.5 rounded-xl bg-amber-500/30 border border-amber-500/60 text-xs font-bold text-amber-300 animate-bounce">
+                Hint: {hintMove}
               </div>
             )}
           </div>
 
-          {/* Victory Overlay Card */}
+          {/* Victory Overlay */}
           {stageSolved && (
-            <div className="absolute inset-0 z-40 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+            <div className="absolute inset-0 z-40 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-slate-800 border border-slate-700 rounded-3xl p-7 max-w-sm w-full text-center shadow-2xl">
                 <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto mb-3">
                   <CheckCircle2 className="w-9 h-9" />
                 </div>
                 <h2 className="text-2xl font-black text-white">Stage {level} Solved!</h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Completed in {formatTime(elapsedTime)} with {moveCount} moves.
-                </p>
-
-                <div className="my-4 p-3.5 rounded-2xl bg-slate-900/60 border border-slate-700/60 text-xs space-y-1.5">
+                <p className="text-xs text-slate-400 mt-1">Completed in {fmt(elapsedTime)} with {moveCount} moves.</p>
+                <div className="my-4 p-3 rounded-2xl bg-slate-900/60 border border-slate-700/60 text-xs space-y-1.5">
                   <div className="flex justify-between text-slate-400">
-                    <span>Cognitive State:</span>
-                    <span className="font-bold text-emerald-400">{patientStats.performanceRating}</span>
+                    <span>Performance:</span>
+                    <span className="font-bold text-emerald-400">{patientStats.rating}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
-                    <span>Reward Earned:</span>
-                    <span className="font-bold text-yellow-400">+50 Coins</span>
+                    <span>Reward:</span>
+                    <span className="font-bold text-yellow-400">+50 Coins 🎉</span>
                   </div>
                 </div>
-
                 <button
-                  onClick={() => startNewPuzzle(null)}
-                  className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2"
+                  onClick={() => startPuzzle(null)}
+                  className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white rounded-xl font-bold text-sm shadow-lg flex items-center justify-center gap-2"
                 >
-                  <span>Advance to Next Stage</span>
-                  <ChevronRight className="w-4 h-4" />
+                  Next Stage <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
           )}
         </div>
 
-        {/* Right Sidebar: Dual Hand Tracker & Rotation Pad */}
-        <aside className="w-full lg:w-96 bg-slate-800/90 border-t lg:border-t-0 lg:border-l border-slate-700/60 p-5 flex flex-col justify-between z-20 space-y-4">
-          
-          {/* 1. Camera Box & Dual Hand Tracking Visualization */}
+        {/* Sidebar */}
+        <aside className="w-full lg:w-[22rem] bg-slate-800/90 border-t lg:border-t-0 lg:border-l border-slate-700/60 p-4 flex flex-col gap-4 z-20">
+
+          {/* Camera + overlay canvas */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Camera className="w-3.5 h-3.5 text-indigo-400" />
-                Dual-Hand Vision Tracking
+                <Camera className="w-3.5 h-3.5 text-indigo-400" /> Hand Tracking
               </span>
-              <button
-                onClick={() => setShowWebcam(!showWebcam)}
-                className="text-[11px] font-semibold text-slate-400 hover:text-slate-200"
-              >
-                {showWebcam ? 'Hide Camera' : 'Show Camera'}
-              </button>
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${!detectorReady ? 'bg-amber-400 animate-ping' : handCount > 0 ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                <span className="text-[11px] text-slate-400">{!detectorReady ? 'Loading AI…' : handCount > 0 ? `${handCount} Hand${handCount>1?'s':''} ✓` : 'No hands'}</span>
+                <button onClick={() => setShowCam(!showCam)} className="text-[10px] text-slate-500 hover:text-slate-300">
+                  {showCam ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
 
-            {showWebcam && (
-              <div className="relative w-full h-44 rounded-2xl overflow-hidden bg-slate-950 border border-slate-700/80 shadow-inner">
+            {showCam && (
+              <div className="relative w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-700/80 shadow-inner" style={{aspectRatio:'4/3'}}>
                 <Webcam
-                  ref={webcamRef}
-                  audio={false}
-                  mirrored={true}
-                  width={640}
-                  height={480}
-                  videoConstraints={{ facingMode: 'user', width: 640, height: 480 }}
-                  className="absolute inset-0 w-full h-full object-cover opacity-85"
-                  onUserMedia={() => setIsCameraActive(true)}
-                  onUserMediaError={(err) => console.error('Webcam stream error:', err)}
+                  ref={webcamRef} audio={false} mirrored={true}
+                  width={320} height={240}
+                  videoConstraints={{ facingMode:'user', width:320, height:240 }}
+                  className="absolute inset-0 w-full h-full object-cover opacity-80"
+                  onUserMedia={() => {}}
+                  onUserMediaError={e => console.error('Cam error:', e)}
                 />
                 <canvas
-                  ref={previewCanvasRef}
-                  width={640}
-                  height={480}
-                  className="absolute inset-0 w-full h-full pointer-events-none z-20"
+                  ref={canvasRef} width={320} height={240}
+                  className="absolute inset-0 w-full h-full pointer-events-none z-10"
                 />
-
-                {/* Real-Time Hand Status Indicator */}
-                <div className="absolute top-2 left-2 z-30 px-2 py-0.5 rounded-md bg-slate-900/85 backdrop-blur-sm text-[10px] font-bold flex items-center gap-1.5 border border-slate-700/60 text-slate-200">
-                  <div className={`w-2 h-2 rounded-full ${!isDetectorReady ? 'bg-amber-400 animate-ping' : detectedHandCount > 0 ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-                  <span>
-                    {!isDetectorReady
-                      ? 'Loading AI...'
-                      : detectedHandCount >= 2
-                      ? '🟢 2 Hands Detected'
-                      : detectedHandCount === 1
-                      ? '🟢 1 Hand Detected'
-                      : 'Show Hands to Camera'}
-                  </span>
-                </div>
-                
-                {/* Visual Legend */}
-                <div className="absolute bottom-2 left-2 right-2 z-30 bg-slate-900/85 backdrop-blur-sm rounded-lg px-2.5 py-1 text-[11px] text-slate-300 flex items-center justify-between border border-slate-700/60">
-                  <span className="text-cyan-300 font-semibold">🔵 Hand 1: Orbit</span>
-                  <span className="text-emerald-300 font-semibold">🟢 Hand 2: Point & Turn</span>
+                {/* Legend */}
+                <div className="absolute bottom-2 left-2 right-2 z-20 bg-slate-900/80 backdrop-blur-sm rounded-lg px-2.5 py-1 text-[10px] text-slate-300 flex justify-between border border-slate-700/40">
+                  <span className="text-cyan-300 font-semibold">◀ Left: Orbit</span>
+                  <span className="text-emerald-300 font-semibold">Right: Turn ▶</span>
                 </div>
               </div>
             )}
           </div>
 
-          {/* 2. Cognitive Feedback & Pace Advisor */}
-          <div className="p-3.5 rounded-2xl bg-indigo-950/40 border border-indigo-900/60 text-xs">
+          {/* Cognitive feedback */}
+          <div className="p-3 rounded-2xl bg-indigo-950/40 border border-indigo-900/60 text-xs">
             <div className="flex items-center gap-1.5 font-bold text-indigo-300 mb-1">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Real-Time Cognitive Pace</span>
+              <Sparkles className="w-3.5 h-3.5" /> Cognitive Feedback
             </div>
-            <p className="text-slate-300 text-[11px] leading-relaxed">
-              {cognitiveFeedback}
-            </p>
-            <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400 pt-1.5 border-t border-indigo-900/40">
-              <span>Scramble Complexity: <strong>{scrambleDepth} Move{scrambleDepth > 1 ? 's' : ''}</strong></span>
-              <span>Turns Taken: <strong>{moveCount}</strong></span>
+            <p className="text-slate-300 text-[11px] leading-relaxed">{feedback}</p>
+            <div className="mt-2 flex justify-between text-[11px] text-slate-400 pt-1.5 border-t border-indigo-900/40">
+              <span>Scramble: <strong>{scrambleDepth} move{scrambleDepth>1?'s':''}</strong></span>
+              <span>Turns: <strong>{moveCount}</strong></span>
             </div>
           </div>
 
-          {/* 3. Accessible Move Buttons */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs text-slate-400 font-semibold">
-              <span>Accessible Layer Controls</span>
-              {hintMove && (
-                <span className="text-amber-400 font-bold animate-pulse">
-                  Next Step: {hintMove}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-4 gap-2">
+          {/* Quick zone guide */}
+          <div className="p-3 rounded-2xl bg-slate-900/50 border border-slate-700/60 text-xs space-y-2">
+            <p className="font-bold text-slate-300 text-[11px]">Right Hand Zones:</p>
+            <div className="grid grid-cols-3 gap-1 text-center text-[10px]">
               {[
-                { label: 'U', name: 'Top ↻' },
-                { label: "U'", name: 'Top ↺' },
-                { label: 'D', name: 'Bottom ↻' },
-                { label: "D'", name: 'Bottom ↺' },
-                { label: 'R', name: 'Right ↻' },
-                { label: "R'", name: 'Right ↺' },
-                { label: 'L', name: 'Left ↻' },
-                { label: "L'", name: 'Left ↺' },
-                { label: 'F', name: 'Front ↻' },
-                { label: "F'", name: 'Front ↺' },
-                { label: 'B', name: 'Back ↻' },
-                { label: "B'", name: 'Back ↺' },
-              ].map((btn) => (
+                {label:'U – Top',    color:'bg-indigo-500/30 text-indigo-300', span:'col-span-3'},
+                {label:'L – Left',   color:'bg-emerald-500/30 text-emerald-300'},
+                {label:'F – Front',  color:'bg-amber-500/30 text-amber-300'},
+                {label:'R – Right',  color:'bg-red-500/30 text-red-300'},
+                {label:'D – Bottom', color:'bg-purple-500/30 text-purple-300', span:'col-span-3'},
+              ].map(z => (
+                <div key={z.label} className={`py-1 px-1 rounded-lg font-bold ${z.color} ${z.span||''} ${activeZone===z.label?'ring-1 ring-sky-400':''}`}>
+                  {z.label}
+                </div>
+              ))}
+            </div>
+            <p className="text-slate-500 text-[10px] text-center">Move right hand into a zone, then swipe ← → ↑ ↓</p>
+          </div>
+
+          {/* Accessible move buttons */}
+          <div className="space-y-2">
+            <div className="flex justify-between items-center text-xs text-slate-400 font-semibold">
+              <span>Button Controls (backup)</span>
+              {hintMove && <span className="text-amber-400 font-bold animate-pulse">Try: {hintMove}</span>}
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {[
+                {l:'U', n:'Top↻'},{l:"U'",n:'Top↺'},
+                {l:'D', n:'Bot↻'},{l:"D'",n:'Bot↺'},
+                {l:'R', n:'Rt↻'}, {l:"R'",n:'Rt↺'},
+                {l:'L', n:'Lt↻'}, {l:"L'",n:'Lt↺'},
+                {l:'F', n:'Fr↻'}, {l:"F'",n:'Fr↺'},
+                {l:'B', n:'Bk↻'}, {l:"B'",n:'Bk↺'},
+              ].map(btn => (
                 <button
-                  key={btn.label}
-                  onClick={() => executeMove(btn.label)}
-                  className={`py-2 px-1 rounded-xl text-xs font-bold transition-all border ${
-                    hintMove === btn.label
+                  key={btn.l}
+                  onClick={() => executeMove(btn.l)}
+                  className={`py-2 px-1 rounded-xl text-[11px] font-bold transition-all border ${
+                    hintMove===btn.l
                       ? 'bg-amber-500 text-slate-900 border-amber-400 ring-2 ring-amber-400/50 scale-105 shadow-lg'
-                      : 'bg-slate-700/60 hover:bg-slate-700 text-slate-200 border-slate-600/60 hover:border-slate-500'
+                      : 'bg-slate-700/60 hover:bg-slate-700 text-slate-200 border-slate-600/60'
                   }`}
                 >
-                  {btn.name}
+                  {btn.n}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* 4. Controls */}
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={() => startNewPuzzle(null)}
-              className="flex-1 py-2.5 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors border border-slate-600/60"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Reshuffle</span>
+          {/* Action buttons */}
+          <div className="flex gap-2">
+            <button onClick={() => startPuzzle(null)} className="flex-1 py-2.5 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-slate-600/60">
+              <RefreshCw className="w-3.5 h-3.5" /> Reshuffle
             </button>
-            <button
-              onClick={provideGentleHint}
-              className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20 transition-all"
-            >
-              <Lightbulb className="w-3.5 h-3.5" />
-              <span>Cognitive Hint</span>
+            <button onClick={giveHint} className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md">
+              <Lightbulb className="w-3.5 h-3.5" /> Hint
             </button>
           </div>
-
         </aside>
       </div>
     </div>
