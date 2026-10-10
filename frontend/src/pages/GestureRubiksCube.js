@@ -8,44 +8,68 @@ import '@tensorflow/tfjs-backend-webgl';
 import {
   ArrowLeft, Camera, RefreshCw, Trophy, Sparkles,
   Volume2, VolumeX, Compass, Lightbulb, CheckCircle2,
-  ChevronRight, Hand, X
+  ChevronRight, Hand, X, Lock, Unlock
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 // ============================================================
-// AUDIO
+// REUSABLE AUDIO SYNTHESIZER (SINGLETON CONTEXT - ZERO LAG)
 // ============================================================
-function playTone(freq, dur, type = 'sine', delay = 0) {
-  try {
+let sharedAudioCtx = null;
+function getAudioCtx() {
+  if (!sharedAudioCtx) {
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    const ctx = new AC();
+    if (AC) sharedAudioCtx = new AC();
+  }
+  if (sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
+    sharedAudioCtx.resume().catch(() => {});
+  }
+  return sharedAudioCtx;
+}
+
+function playTone(freq, dur, type = 'sine', delay = 0, vol = 0.1) {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
     setTimeout(() => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = type;
       osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.setValueAtTime(vol, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur / 1000);
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(); osc.stop(ctx.currentTime + dur / 1000);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + dur / 1000);
     }, delay);
   } catch (e) {}
 }
-const playTurnSound    = () => { playTone(340,70); playTone(460,80,  'sine',35); };
-const playSuccessSound = () => { playTone(523,120); playTone(659,120,'sine',90); playTone(784,150,'sine',180); playTone(1046,300,'sine',270); };
-const playHintSound    = () => { playTone(660,100); playTone(880,140,'sine',80); };
+
+const playLockSound    = () => playTone(580, 45, 'sine', 0, 0.07);
+const playTurnSound    = () => { playTone(340, 65, 'sine'); playTone(480, 75, 'sine', 30); };
+const playSuccessSound = () => {
+  playTone(523.25, 110);
+  playTone(659.25, 110, 'sine', 85);
+  playTone(783.99, 140, 'sine', 170);
+  playTone(1046.5, 280, 'sine', 260);
+};
+const playHintSound    = () => { playTone(660, 90); playTone(880, 130, 'sine', 75); };
 
 // ============================================================
-// CUBE COLORS
+// OFFICIAL RUBIK'S CUBE COLOR PALETTE
 // ============================================================
 const CUBE_COLORS = {
-  RIGHT: 0xb71234, LEFT: 0xff5800, UP: 0xffffff,
-  DOWN: 0xffd500, FRONT: 0x009b48, BACK: 0x0046ad,
-  INSIDE: 0x18181b,
+  RIGHT:  0xb71234, // Red (+X)
+  LEFT:   0xff5800, // Orange (-X)
+  UP:     0xffffff, // White (+Y)
+  DOWN:   0xffd500, // Yellow (-Y)
+  FRONT:  0x009b48, // Green (+Z)
+  BACK:   0x0046ad, // Blue (-Z)
+  INSIDE: 0x18181b, // Core
 };
 
-// Hand skeleton connections
+// Minimal skeleton connections for fast 2D drawing
 const HAND_CONNECTIONS = [
   [0,1],[1,2],[2,3],[3,4],
   [0,5],[5,6],[6,7],[7,8],
@@ -56,61 +80,109 @@ const HAND_CONNECTIONS = [
 ];
 
 // ============================================================
-// EMA SMOOTHING (velocity-adaptive)
+// VELOCITY-ADAPTIVE SMOOTHER
 // ============================================================
 class Smoother {
-  constructor(alpha = 0.5) { this.a = alpha; this.x = null; this.y = null; }
+  constructor(alpha = 0.5) {
+    this.a = alpha;
+    this.x = null;
+    this.y = null;
+  }
   filter(x, y) {
-    if (this.x === null) { this.x = x; this.y = y; return { x, y }; }
+    if (this.x === null) {
+      this.x = x;
+      this.y = y;
+      return { x, y };
+    }
     const speed = Math.abs(x - this.x) + Math.abs(y - this.y);
-    const a = speed > 20 ? Math.min(this.a + 0.3, 0.92) : this.a;
+    const a = speed > 0.06 ? Math.min(this.a + 0.3, 0.92) : this.a;
     this.x += (x - this.x) * a;
     this.y += (y - this.y) * a;
     return { x: this.x, y: this.y };
   }
-  reset() { this.x = null; this.y = null; }
+  reset() {
+    this.x = null;
+    this.y = null;
+  }
 }
 
 // ============================================================
-// HOW TO PLAY MODAL
+// HOW TO PLAY INSTRUCTION MODAL (SHOWN AT BEGINNING)
 // ============================================================
 function HowToPlayModal({ onClose }) {
   const steps = [
-    { icon: '✋', color: 'text-cyan-400', title: 'Left Hand — Spin the Cube', desc: 'Hold your LEFT hand in view and move it left/right or up/down to rotate the entire cube so you can see all sides.' },
-    { icon: '👋', color: 'text-emerald-400', title: 'Right Hand — Choose a Layer', desc: 'Move your RIGHT hand into one of the 6 colored zones shown on the camera preview. Each zone targets a cube layer (Top, Bottom, Left, Right, Front, Back).' },
-    { icon: '⬅️➡️', color: 'text-amber-400', title: 'Swipe to Rotate a Layer', desc: 'Once a layer is highlighted (it glows blue), quickly SWIPE your right hand LEFT or RIGHT to rotate that layer clockwise or counter-clockwise.' },
-    { icon: '⬆️⬇️', color: 'text-rose-400', title: 'Swipe Up/Down too!', desc: 'You can also swipe UP or DOWN to rotate side layers (Left/Right faces) in the vertical direction.' },
-    { icon: '🧩', color: 'text-indigo-400', title: 'Goal: Make all sides one colour!', desc: 'Match all 9 squares on every face to the same colour. Take your time — there is no time limit and you can always ask for a Hint!' },
+    {
+      icon: '✋',
+      badge: 'LEFT HAND',
+      color: 'text-cyan-400 bg-cyan-500/15 border-cyan-500/30',
+      title: 'Revolve the Entire Cube',
+      desc: 'Raise your LEFT hand on the left side of the camera and move it smoothly to spin and inspect all sides of the 3D cube.',
+    },
+    {
+      icon: '👆',
+      badge: 'RIGHT HAND (OPEN)',
+      color: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30',
+      title: 'Hover to Select a Cube Side',
+      desc: 'Keep your RIGHT hand OPEN on the right side of the camera. Move it into a zone (Top, Bottom, Left, Right, or Front) to highlight that side on the cube. Moving while open will NEVER accidentally turn a side.',
+    },
+    {
+      icon: '🤏',
+      badge: 'RIGHT HAND (PINCH & SWIPE)',
+      color: 'text-amber-400 bg-amber-500/15 border-amber-500/30',
+      title: 'Pinch to Lock Side, Swipe to Rotate!',
+      desc: 'Pinch your thumb and index finger together to LOCK the selected side (it turns Gold). While holding the pinch, swipe Left ←, Right →, Up ↑, or Down ↓ to rotate that side! Unpinch to release.',
+    },
+    {
+      icon: '💡',
+      badge: 'PATIENT-FRIENDLY',
+      color: 'text-indigo-400 bg-indigo-500/15 border-indigo-500/30',
+      title: 'Zero Rush, Gentle Stages',
+      desc: 'There is no timer pressure or lives to lose. Stage 1 starts with just 1 simple turn, and you can press "Hint" anytime for guidance!',
+    },
   ];
+
   return (
-    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-800 border border-slate-700 rounded-3xl p-6 max-w-md w-full shadow-2xl relative">
-        <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">
+    <div className="fixed inset-0 z-[200] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+      <div className="bg-slate-800 border border-slate-700 rounded-3xl p-6 max-w-lg w-full shadow-2xl relative">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 rounded-xl bg-slate-700/80 hover:bg-slate-600 text-slate-300"
+        >
           <X className="w-4 h-4" />
         </button>
+
         <div className="flex items-center gap-3 mb-5">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-400 to-rose-500 flex items-center justify-center text-xl">🎮</div>
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 via-rose-500 to-indigo-500 flex items-center justify-center text-2xl shadow-lg">
+            🧊
+          </div>
           <div>
-            <h2 className="text-lg font-black text-white">How to Play</h2>
-            <p className="text-xs text-slate-400">Gesture Rubik's Cube</p>
+            <h2 className="text-xl font-black text-white">How to Play Gesture Rubik's Cube</h2>
+            <p className="text-xs text-slate-400">Simple Two-Hand Therapy Controls</p>
           </div>
         </div>
-        <div className="space-y-4 mb-6">
+
+        <div className="space-y-3.5 mb-6">
           {steps.map((s, i) => (
-            <div key={i} className="flex gap-3 items-start">
-              <div className="text-2xl mt-0.5 w-8 flex-shrink-0 text-center">{s.icon}</div>
-              <div>
-                <p className={`text-sm font-bold ${s.color}`}>{s.title}</p>
-                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">{s.desc}</p>
+            <div key={i} className="flex gap-3.5 items-start p-3 rounded-2xl bg-slate-900/60 border border-slate-700/60">
+              <div className="text-2xl mt-0.5 w-9 flex-shrink-0 text-center">{s.icon}</div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${s.color}`}>
+                    {s.badge}
+                  </span>
+                  <span className="text-sm font-bold text-white">{s.title}</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">{s.desc}</p>
               </div>
             </div>
           ))}
         </div>
+
         <button
           onClick={onClose}
-          className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white rounded-xl font-bold text-sm shadow-lg flex items-center justify-center gap-2"
+          className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white rounded-xl font-black text-sm shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition-all"
         >
-          <span>Let's Play!</span>
+          <span>Start Playing Stage 1</span>
           <ChevronRight className="w-4 h-4" />
         </button>
       </div>
@@ -119,24 +191,23 @@ function HowToPlayModal({ onClose }) {
 }
 
 // ============================================================
-// GESTURE ZONE OVERLAY (6 zones mapped to 6 faces)
+// ZONE MAPPING FOR RIGHT HAND (SELECTING CUBE SIDE)
 // ============================================================
-//  Camera preview is 320×240 (or scaled). 
-//  We divide the right-hand's position into 6 zones:
-//   Top-Left=U, Top-Right=U, Middle-Left=L, Middle-Right=R, Bottom-Left=D, Bottom-Right=D
-//  Actually we use 3 rows × 2 cols:
-//   Top row (y<0.33): U (Top)
-//   Mid row (y 0.33-0.67): Left side → L, Right side → R
-//   Bot row (y>0.67): D (Bottom)
-//  Plus: x<0.2 → B (Back), x>0.8 → F (Front)  [far edges]
-function getLayerFromZone(nx, ny) {
-  // nx, ny are 0..1 normalised (0,0)=top-left
-  if (ny < 0.28) return { axis: 'y', layerIndex: 1,  name: 'U – Top',    move: { cw: 'U',  ccw: "U'" } };
-  if (ny > 0.72) return { axis: 'y', layerIndex: -1, name: 'D – Bottom', move: { cw: 'D',  ccw: "D'" } };
-  if (nx < 0.38) return { axis: 'x', layerIndex: -1, name: 'L – Left',   move: { cw: 'L',  ccw: "L'" } };
-  if (nx > 0.62) return { axis: 'x', layerIndex: 1,  name: 'R – Right',  move: { cw: 'R',  ccw: "R'" } };
-  // Centre → front face
-  return { axis: 'z', layerIndex: 1, name: 'F – Front', move: { cw: 'F', ccw: "F'" } };
+// rx is normalized within the Right-Hand region (0..1), ry is normalized height (0..1)
+function getZoneFromRightHand(rx, ry) {
+  if (ry < 0.28) {
+    return { key: 'U', label: 'Top Side (U)', short: 'TOP (U)', orient: 'horizontal' };
+  }
+  if (ry > 0.72) {
+    return { key: 'D', label: 'Bottom Side (D)', short: 'BOTTOM (D)', orient: 'horizontal' };
+  }
+  if (rx < 0.34) {
+    return { key: 'L', label: 'Left Side (L)', short: 'LEFT (L)', orient: 'vertical' };
+  }
+  if (rx > 0.66) {
+    return { key: 'R', label: 'Right Side (R)', short: 'RIGHT (R)', orient: 'vertical' };
+  }
+  return { key: 'F', label: 'Front Side (F)', short: 'FRONT (F)', orient: 'face' };
 }
 
 // ============================================================
@@ -146,69 +217,89 @@ const GestureRubiksCube = () => {
   const navigate = useNavigate();
   const { user, syncProgress } = useAuth();
 
-  // ── DOM refs ──────────────────────────────────────────────
-  const mountRef        = useRef(null);
-  const webcamRef       = useRef(null);
-  const canvasRef       = useRef(null);
+  // DOM & Canvas Refs
+  const mountRef          = useRef(null);
+  const webcamRef         = useRef(null);
+  const hudCanvasRef      = useRef(null);
   const confettiCanvasRef = useRef(null);
-  const confettiAnimRef = useRef(null);
+  const confettiAnimRef   = useRef(null);
+  const offscreenCanvasRef = useRef(null);
 
-  // ── Three.js refs ─────────────────────────────────────────
-  const sceneRef       = useRef(null);
-  const cameraRef      = useRef(null);
-  const rendererRef    = useRef(null);
-  const cubeGroupRef   = useRef(null);
-  const cubiesRef      = useRef([]);
-  const isAnimRef      = useRef(false);
-  const moveQueueRef   = useRef([]);
+  // Three.js Refs
+  const sceneRef      = useRef(null);
+  const cameraRef     = useRef(null);
+  const rendererRef   = useRef(null);
+  const cubeGroupRef  = useRef(null);
+  const cubiesRef     = useRef([]);
+  const isAnimRef     = useRef(false);
+  const moveQueueRef  = useRef([]);
 
-  // ── Target rotation for 60 FPS lerp ──────────────────────
-  const targetRotRef   = useRef({ x: 0.4, y: 0.6 });
+  // Smooth 60 FPS Orbit Target
+  const targetRotRef  = useRef({ x: 0.38, y: -0.55 });
 
-  // ── Mouse fallback ────────────────────────────────────────
-  const isDraggingRef  = useRef(false);
-  const prevMouseRef   = useRef({ x: 0, y: 0 });
+  // Mouse Orbit Fallback
+  const isDraggingRef = useRef(false);
+  const prevMouseRef  = useRef({ x: 0, y: 0 });
 
-  // ── Gesture state refs (no React re-renders in loop) ──────
-  const detectorRef    = useRef(null);
-  const ctxRef         = useRef(null);
-  const leftSmoother   = useRef(new Smoother(0.45));
-  const rightSmoother  = useRef(new Smoother(0.55));
-  const prevLeftRef    = useRef(null);
-  const swipeStartRef  = useRef(null);
-  const swipeLockRef   = useRef(false);
-  const lastMoveRef    = useRef(0);
-  const lastCountRef   = useRef(0);
-  const currentZoneRef = useRef(null);
-  const executeMoveRef = useRef(null);
-  const highlightRef   = useRef(null);
-  const stageSolvedRef = useRef(false);
+  // Gesture Tracking Refs (Zero React re-render overhead inside loop)
+  const detectorRef       = useRef(null);
+  const hudCtxRef         = useRef(null);
+  const leftSmoothRef     = useRef(new Smoother(0.48));
+  const rightSmoothRef    = useRef(new Smoother(0.55));
+  const prevLeftPosRef    = useRef(null);
+  const hoveredZoneRef    = useRef(null);
+  const lockedZoneRef     = useRef(null);
+  const isPinchedRef      = useRef(false);
+  const pinchAnchorRef    = useRef(null);
+  const swipeDoneInPinchRef = useRef(false);
+  const lastMoveTimeRef   = useRef(0);
+  const swapHandsRef      = useRef(false);
+  const lastHighlightKeyRef = useRef('');
 
-  // ── UI state ──────────────────────────────────────────────
-  const [level, setLevel]           = useState(user?.gameStats?.rubiksCubeLevel || 1);
-  const [coins, setCoins]           = useState(user?.coins ?? 100);
-  const [totalSolved, setTotalSolved] = useState(0);
-  const [stageSolved, setStageSolved] = useState(false);
-  const [moveCount, setMoveCount]   = useState(0);
-  const [isSoundOn, setIsSoundOn]   = useState(true);
+  // Track persistent hand assignments so hands don't swap mid-gesture
+  const handMemoryRef = useRef({
+    left:  { x: 0.25, y: 0.5, lastSeen: 0 },
+    right: { x: 0.75, y: 0.5, lastSeen: 0 },
+  });
+
+  // Callback Refs
+  const executeVisualMoveRef = useRef(null);
+  const executeNotationRef   = useRef(null);
+  const highlightLayerRef    = useRef(null);
+  const stageSolvedRef       = useRef(false);
+
+  // UI States
+  const [level, setLevel]               = useState(user?.gameStats?.rubiksCubeLevel || 1);
+  const [coins, setCoins]               = useState(user?.coins ?? 100);
+  const [totalSolved, setTotalSolved]   = useState(0);
+  const [stageSolved, setStageSolved]   = useState(false);
+  const [moveCount, setMoveCount]       = useState(0);
+  const [isSoundOn, setIsSoundOn]       = useState(true);
   const [detectorReady, setDetectorReady] = useState(false);
-  const [handCount, setHandCount]   = useState(0);
-  const [showCam, setShowCam]       = useState(true);
-  const [activeZone, setActiveZone] = useState(null);
-  const [hintMove, setHintMove]     = useState(null);
-  const [elapsedTime, setElapsedTime] = useState(0);
+  const [handCount, setHandCount]       = useState(0);
+  const [showCam, setShowCam]           = useState(true);
+  const [swapHands, setSwapHands]       = useState(false);
+  const [activeZone, setActiveZone]     = useState(null);
+  const [isPinchedUI, setIsPinchedUI]   = useState(false);
+  const [swipeToast, setSwipeToast]     = useState(null);
+  const [hintMove, setHintMove]         = useState(null);
+  const [elapsedTime, setElapsedTime]   = useState(0);
   const [scrambleDepth, setScrambleDepth] = useState(1);
   const [stageStartTime, setStageStartTime] = useState(Date.now());
-  const [feedback, setFeedback]     = useState('Welcome! Use your hands to solve the cube. Take your time!');
-  const [patientStats, setPatientStats] = useState({ avgSolveTime: 0, rating: 'Great' });
-  const [showHowTo, setShowHowTo]   = useState(true);
-  const [swipeDir, setSwipeDir]     = useState(null); // visual swipe indicator
+  const [feedback, setFeedback]         = useState('Stage 1: Hover with Right Hand to select a side, Pinch to lock, and Swipe to turn!');
+  const [patientStats, setPatientStats] = useState({ avgSolveTime: 0, rating: 'Optimal' });
+  const [showHowTo, setShowHowTo]       = useState(true);
 
-  const scrambleHistRef = useRef([]);
+  // History of applied moves for accurate hints
+  const moveHistoryRef = useRef([]);
 
-  // ─────────────────────────────────────────────────────────
-  // 1. THREE.JS CUBE
-  // ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    swapHandsRef.current = swapHands;
+  }, [swapHands]);
+
+  // ============================================================
+  // 1. THREE.JS CUBE INITIALIZATION (OPTIMIZED FOR 60 FPS, NO SHADOW LAG)
+  // ============================================================
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -219,29 +310,34 @@ const GestureRubiksCube = () => {
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
-    camera.position.set(5.5, 4.5, 6.5);
+    const camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 100);
+    camera.position.set(0, 0, 8.2);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    // Fast WebGL Renderer — shadowMap disabled for 2x GPU performance
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+    });
     renderer.setSize(w, h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-    const dl1 = new THREE.DirectionalLight(0xffffff, 0.9);
-    dl1.position.set(8, 14, 10); dl1.castShadow = true;
+    // Clean Studio Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 1.05));
+    const dl1 = new THREE.DirectionalLight(0xffffff, 0.85);
+    dl1.position.set(6, 10, 10);
     scene.add(dl1);
-    const dl2 = new THREE.DirectionalLight(0x93c5fd, 0.4);
-    dl2.position.set(-8, -6, -8);
+    const dl2 = new THREE.DirectionalLight(0x93c5fd, 0.35);
+    dl2.position.set(-6, -8, -6);
     scene.add(dl2);
 
     const cubeGroup = new THREE.Group();
+    cubeGroup.rotation.set(targetRotRef.current.x, targetRotRef.current.y, 0);
     scene.add(cubeGroup);
     cubeGroupRef.current = cubeGroup;
 
@@ -253,16 +349,15 @@ const GestureRubiksCube = () => {
         for (let z = -1; z <= 1; z++) {
           if (x === 0 && y === 0 && z === 0) continue;
           const mats = [
-            new THREE.MeshStandardMaterial({ color: x ===  1 ? CUBE_COLORS.RIGHT  : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
-            new THREE.MeshStandardMaterial({ color: x === -1 ? CUBE_COLORS.LEFT   : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
-            new THREE.MeshStandardMaterial({ color: y ===  1 ? CUBE_COLORS.UP     : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
-            new THREE.MeshStandardMaterial({ color: y === -1 ? CUBE_COLORS.DOWN   : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
-            new THREE.MeshStandardMaterial({ color: z ===  1 ? CUBE_COLORS.FRONT  : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
-            new THREE.MeshStandardMaterial({ color: z === -1 ? CUBE_COLORS.BACK   : CUBE_COLORS.INSIDE, roughness: 0.1, metalness: 0.05, emissive: new THREE.Color(0) }),
+            new THREE.MeshLambertMaterial({ color: x ===  1 ? CUBE_COLORS.RIGHT  : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
+            new THREE.MeshLambertMaterial({ color: x === -1 ? CUBE_COLORS.LEFT   : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
+            new THREE.MeshLambertMaterial({ color: y ===  1 ? CUBE_COLORS.UP     : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
+            new THREE.MeshLambertMaterial({ color: y === -1 ? CUBE_COLORS.DOWN   : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
+            new THREE.MeshLambertMaterial({ color: z ===  1 ? CUBE_COLORS.FRONT  : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
+            new THREE.MeshLambertMaterial({ color: z === -1 ? CUBE_COLORS.BACK   : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
           ];
           const mesh = new THREE.Mesh(geo, mats);
           mesh.position.set(x, y, z);
-          mesh.castShadow = true;
           cubeGroup.add(mesh);
           cubies.push(mesh);
         }
@@ -270,21 +365,20 @@ const GestureRubiksCube = () => {
     }
     cubiesRef.current = cubies;
 
-    // 60 FPS render + lerp
     let animId;
     const animate = () => {
       animId = requestAnimationFrame(animate);
       const tr = targetRotRef.current;
-      cubeGroup.rotation.y += (tr.y - cubeGroup.rotation.y) * 0.2;
-      cubeGroup.rotation.x += (tr.x - cubeGroup.rotation.x) * 0.2;
-      cubeGroup.position.y = Math.sin(Date.now() / 1500) * 0.04;
+      cubeGroup.rotation.y += (tr.y - cubeGroup.rotation.y) * 0.22;
+      cubeGroup.rotation.x += (tr.x - cubeGroup.rotation.x) * 0.22;
       renderer.render(scene, camera);
     };
     animate();
 
     const onResize = () => {
       if (!container || !renderer) return;
-      const nw = container.clientWidth; const nh = container.clientHeight;
+      const nw = container.clientWidth;
+      const nh = container.clientHeight;
       camera.aspect = nw / nh;
       camera.updateProjectionMatrix();
       renderer.setSize(nw, nh);
@@ -294,16 +388,87 @@ const GestureRubiksCube = () => {
     return () => {
       window.removeEventListener('resize', onResize);
       cancelAnimationFrame(animId);
-      renderer.dispose(); geo.dispose();
-      cubies.forEach(c => { if (Array.isArray(c.material)) c.material.forEach(m => m.dispose()); });
+      renderer.dispose();
+      geo.dispose();
+      cubies.forEach((c) => {
+        if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
+      });
     };
   }, []);
 
-  // ─────────────────────────────────────────────────────────
-  // 2. LAYER ROTATION ENGINE
-  // ─────────────────────────────────────────────────────────
-  const rotateLayer = useCallback((axis, layerIndex, angle, dur = 200) => {
-    return new Promise(resolve => {
+  // ============================================================
+  // 2. RESOLVE VIEW-ALIGNED CUBE LAYER FROM ZONE KEY ('U','D','L','R','F','B')
+  // ============================================================
+  // Maps 'U','D','L','R','F','B' to the actual Three.js cube axis & layer that is
+  // currently at the Top, Bottom, Left, Right, Front, or Back of the user's screen!
+  const resolveViewAlignedLayer = useCallback((zoneKey) => {
+    const cg = cubeGroupRef.current;
+    if (!cg) return { axis: 'y', layerIndex: 1 };
+
+    const localAxes = [
+      { axis: 'x', layerIndex:  1, vec: new THREE.Vector3( 1,  0,  0) },
+      { axis: 'x', layerIndex: -1, vec: new THREE.Vector3(-1,  0,  0) },
+      { axis: 'y', layerIndex:  1, vec: new THREE.Vector3( 0,  1,  0) },
+      { axis: 'y', layerIndex: -1, vec: new THREE.Vector3( 0, -1,  0) },
+      { axis: 'z', layerIndex:  1, vec: new THREE.Vector3( 0,  0,  1) },
+      { axis: 'z', layerIndex: -1, vec: new THREE.Vector3( 0,  0, -1) },
+    ];
+
+    const targetDir = new THREE.Vector3();
+    if (zoneKey === 'U') targetDir.set(0, 1, 0);
+    else if (zoneKey === 'D') targetDir.set(0, -1, 0);
+    else if (zoneKey === 'L') targetDir.set(-1, 0, 0);
+    else if (zoneKey === 'R') targetDir.set(1, 0, 0);
+    else if (zoneKey === 'B') targetDir.set(0, 0, -1);
+    else targetDir.set(0, 0, 1); // 'F'
+
+    let best = localAxes[0];
+    let bestDot = -Infinity;
+    for (const candidate of localAxes) {
+      const worldVec = candidate.vec.clone().applyQuaternion(cg.quaternion);
+      const d = worldVec.dot(targetDir);
+      if (d > bestDot) {
+        bestDot = d;
+        best = candidate;
+      }
+    }
+    return { axis: best.axis, layerIndex: best.layerIndex, worldNormal: best.vec.clone().applyQuaternion(cg.quaternion) };
+  }, []);
+
+  // ============================================================
+  // 3. HIGHLIGHT SELECTED OR LOCKED LAYER ON 3D CUBE
+  // ============================================================
+  const highlightLayer = useCallback((zoneKey, isLocked = false) => {
+    const cacheKey = `${zoneKey || 'none'}_${isLocked ? 'L' : 'H'}`;
+    if (lastHighlightKeyRef.current === cacheKey) return;
+    lastHighlightKeyRef.current = cacheKey;
+
+    const cubies = cubiesRef.current;
+    if (!cubies) return;
+
+    const resolved = zoneKey ? resolveViewAlignedLayer(zoneKey) : null;
+    // Gold glow when pinched/locked, Sky Blue glow when hovering
+    const glowHex = isLocked ? 0xf59e0b : 0x38bdf8;
+
+    cubies.forEach((m) => {
+      let match = false;
+      if (resolved) {
+        const v = resolved.axis === 'x' ? m.position.x : resolved.axis === 'y' ? m.position.y : m.position.z;
+        match = Math.abs(v - resolved.layerIndex) < 0.3;
+      }
+      m.material.forEach((mat) => {
+        if (mat.color.getHex() !== CUBE_COLORS.INSIDE) {
+          mat.emissive.setHex(match ? glowHex : 0x000000);
+        }
+      });
+    });
+  }, [resolveViewAlignedLayer]);
+
+  // ============================================================
+  // 4. LAYER ROTATION ANIMATION ENGINE
+  // ============================================================
+  const rotateLayer = useCallback((axis, layerIndex, angle, dur = 180) => {
+    return new Promise((resolve) => {
       if (isAnimRef.current) {
         moveQueueRef.current.push({ axis, layerIndex, angle, dur, resolve });
         return;
@@ -311,16 +476,20 @@ const GestureRubiksCube = () => {
       isAnimRef.current = true;
       const cg = cubeGroupRef.current;
       const cubies = cubiesRef.current;
-      if (!cg || !cubies) { isAnimRef.current = false; resolve(); return; }
+      if (!cg || !cubies) {
+        isAnimRef.current = false;
+        resolve();
+        return;
+      }
 
-      const active = cubies.filter(m => {
+      const active = cubies.filter((m) => {
         const v = axis === 'x' ? m.position.x : axis === 'y' ? m.position.y : m.position.z;
         return Math.abs(v - layerIndex) < 0.3;
       });
 
       const pivot = new THREE.Group();
       cg.add(pivot);
-      active.forEach(c => pivot.attach(c));
+      active.forEach((c) => pivot.attach(c));
       if (isSoundOn) playTurnSound();
 
       const t0 = performance.now();
@@ -331,14 +500,17 @@ const GestureRubiksCube = () => {
         else if (axis === 'y') pivot.rotation.y = angle * e;
         else pivot.rotation.z = angle * e;
 
-        if (p < 1) { requestAnimationFrame(step); return; }
+        if (p < 1) {
+          requestAnimationFrame(step);
+          return;
+        }
 
         if (axis === 'x') pivot.rotation.x = angle;
         else if (axis === 'y') pivot.rotation.y = angle;
         else pivot.rotation.z = angle;
         pivot.updateMatrixWorld();
 
-        active.forEach(c => {
+        active.forEach((c) => {
           cg.attach(c);
           c.position.x = Math.round(c.position.x);
           c.position.y = Math.round(c.position.y);
@@ -346,6 +518,7 @@ const GestureRubiksCube = () => {
         });
         cg.remove(pivot);
         isAnimRef.current = false;
+        lastHighlightKeyRef.current = ''; // refresh highlight
         resolve();
 
         const nxt = moveQueueRef.current.shift();
@@ -355,202 +528,293 @@ const GestureRubiksCube = () => {
     });
   }, [isSoundOn]);
 
-  const executeMove = useCallback(async (notation, isUser = true) => {
-    if (stageSolvedRef.current && isUser) return;
-    const MAP = {
-      'U':  { axis:'y', layer:1,  angle:-Math.PI/2 },
-      "U'": { axis:'y', layer:1,  angle: Math.PI/2 },
-      'D':  { axis:'y', layer:-1, angle: Math.PI/2 },
-      "D'": { axis:'y', layer:-1, angle:-Math.PI/2 },
-      'R':  { axis:'x', layer:1,  angle:-Math.PI/2 },
-      "R'": { axis:'x', layer:1,  angle: Math.PI/2 },
-      'L':  { axis:'x', layer:-1, angle: Math.PI/2 },
-      "L'": { axis:'x', layer:-1, angle:-Math.PI/2 },
-      'F':  { axis:'z', layer:1,  angle:-Math.PI/2 },
-      "F'": { axis:'z', layer:1,  angle: Math.PI/2 },
-      'B':  { axis:'z', layer:-1, angle: Math.PI/2 },
-      "B'": { axis:'z', layer:-1, angle:-Math.PI/2 },
-    };
-    const m = MAP[notation]; if (!m) return;
-    await rotateLayer(m.axis, m.layer, m.angle, 190);
-    if (isUser) { setMoveCount(p => p + 1); checkSolved(); }
-  }, [rotateLayer]);
-
-  // ─────────────────────────────────────────────────────────
-  // 3. HIGHLIGHT LAYER
-  // ─────────────────────────────────────────────────────────
-  const highlightLayer = useCallback((layerInfo) => {
-    const cubies = cubiesRef.current;
-    if (!cubies) return;
-    cubies.forEach(m => {
-      let match = false;
-      if (layerInfo) {
-        const v = layerInfo.axis === 'x' ? m.position.x : layerInfo.axis === 'y' ? m.position.y : m.position.z;
-        match = Math.abs(v - layerInfo.layerIndex) < 0.3;
-      }
-      m.material.forEach(mat => {
-        if (mat.color.getHex() !== CUBE_COLORS.INSIDE) {
-          mat.emissive.setHex(match ? 0x38bdf8 : 0x000000);
-          mat.emissiveIntensity = match ? 0.4 : 0;
-        }
-      });
-    });
-  }, []);
-
-  // ─────────────────────────────────────────────────────────
-  // 4. CHECK SOLVE
-  // ─────────────────────────────────────────────────────────
+  // ============================================================
+  // 5. CHECK IF CUBE IS SOLVED
+  // ============================================================
   const checkSolved = useCallback(() => {
     const cubies = cubiesRef.current;
     if (!cubies?.length) return false;
-    const faceNormals = [
-      new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0),
-      new THREE.Vector3(0,1,0), new THREE.Vector3(0,-1,0),
-      new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1),
+    const dirs = [
+      new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0),
+      new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0),
+      new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1),
     ];
-    const localNormals = [
-      new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0),
-      new THREE.Vector3(0,1,0), new THREE.Vector3(0,-1,0),
-      new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1),
-    ];
-    for (const fn of faceNormals) {
-      const side = cubies.filter(m => {
+    for (const fn of dirs) {
+      const side = cubies.filter((m) => {
         if (fn.x) return Math.abs(m.position.x - fn.x) < 0.3;
         if (fn.y) return Math.abs(m.position.y - fn.y) < 0.3;
         return Math.abs(m.position.z - fn.z) < 0.3;
       });
       if (side.length !== 9) continue;
-      const colors = side.map(m => {
-        let best = -Infinity, col = null;
-        localNormals.forEach((ln, i) => {
+      const colors = side.map((m) => {
+        let best = -Infinity;
+        let col = null;
+        dirs.forEach((ln, i) => {
           const wn = ln.clone().applyQuaternion(m.quaternion);
           const d = wn.dot(fn);
-          if (d > best) { best = d; col = m.material[i].color.getHex(); }
+          if (d > best) {
+            best = d;
+            col = m.material[i].color.getHex();
+          }
         });
         return col;
       });
-      if (!colors.every(c => c === colors[0])) return false;
+      if (!colors.every((c) => c === colors[0])) return false;
     }
     handleVictory();
     return true;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─────────────────────────────────────────────────────────
-  // 5. CONFETTI
-  // ─────────────────────────────────────────────────────────
+  // Standard notation move (for buttons, scrambler, and hint solver)
+  const executeNotationMove = useCallback(async (notation, isUser = true) => {
+    if (stageSolvedRef.current && isUser) return;
+    const MAP = {
+      'U':  { axis: 'y', layer:  1, angle: -Math.PI / 2 },
+      "U'": { axis: 'y', layer:  1, angle:  Math.PI / 2 },
+      'D':  { axis: 'y', layer: -1, angle:  Math.PI / 2 },
+      "D'": { axis: 'y', layer: -1, angle: -Math.PI / 2 },
+      'R':  { axis: 'x', layer:  1, angle: -Math.PI / 2 },
+      "R'": { axis: 'x', layer:  1, angle:  Math.PI / 2 },
+      'L':  { axis: 'x', layer: -1, angle:  Math.PI / 2 },
+      "L'": { axis: 'x', layer: -1, angle: -Math.PI / 2 },
+      'F':  { axis: 'z', layer:  1, angle: -Math.PI / 2 },
+      "F'": { axis: 'z', layer:  1, angle:  Math.PI / 2 },
+      'B':  { axis: 'z', layer: -1, angle:  Math.PI / 2 },
+      "B'": { axis: 'z', layer: -1, angle: -Math.PI / 2 },
+    };
+    const m = MAP[notation];
+    if (!m) return;
+    await rotateLayer(m.axis, m.layer, m.angle, 180);
+    if (isUser) {
+      moveHistoryRef.current.push({ axis: m.axis, layer: m.layer, angle: m.angle });
+      setMoveCount((p) => p + 1);
+      setHintMove(null);
+      checkSolved();
+    }
+  }, [rotateLayer, checkSolved]);
+
+  // ============================================================
+  // 6. VIEW-ALIGNED SWIPE ROTATION (100% MATCHES HAND SWIPE DIRECTION!)
+  // ============================================================
+  // Given a locked zoneKey ('U','D','L','R','F','B') and hand swipe vector (dx, dy) on screen,
+  // computes the exact 3D rotation angle so the stickers move in the EXACT direction of the hand!
+  const executeVisualSwipeMove = useCallback(async (zoneKey, dx, dy) => {
+    if (stageSolvedRef.current || isAnimRef.current) return;
+    const cg = cubeGroupRef.current;
+    if (!cg) return;
+
+    const { axis, layerIndex } = resolveViewAlignedLayer(zoneKey);
+
+    // Local rotation axis vector in world space
+    const localAxisVec = new THREE.Vector3(
+      axis === 'x' ? 1 : 0,
+      axis === 'y' ? 1 : 0,
+      axis === 'z' ? 1 : 0
+    );
+    const worldAxis = localAxisVec.clone().applyQuaternion(cg.quaternion);
+
+    // Pick a point on the front of this layer (closest to camera +Z)
+    // Velocity of a point P under positive rotation (+angle) around worldAxis is: V = worldAxis x P
+    const samplePoint = new THREE.Vector3(0, 0, 1);
+    if (zoneKey === 'F' || zoneKey === 'B') {
+      // For Front/Back face, sample the top edge (0, 1, 0) so swiping Right turns clockwise
+      samplePoint.set(0, 1, 0);
+    }
+
+    const tangent = new THREE.Vector3().crossVectors(worldAxis, samplePoint);
+    // Screen swipe vector (screen +X is right, screen -Y is up -> Three.js +Y is up)
+    const swipeVec3D = new THREE.Vector3(dx, -dy, 0);
+
+    const dot = tangent.dot(swipeVec3D);
+    const angle = dot >= 0 ? Math.PI / 2 : -Math.PI / 2;
+
+    await rotateLayer(axis, layerIndex, angle, 180);
+    moveHistoryRef.current.push({ axis, layer: layerIndex, angle });
+    setMoveCount((p) => p + 1);
+    setHintMove(null);
+    checkSolved();
+  }, [resolveViewAlignedLayer, rotateLayer, checkSolved]);
+
+  // ============================================================
+  // 7. CONFETTI & STAGE VICTORY
+  // ============================================================
   const triggerConfetti = useCallback(() => {
-    const canvas = confettiCanvasRef.current; if (!canvas) return;
+    const canvas = confettiCanvasRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     canvas.width = canvas.clientWidth || window.innerWidth;
     canvas.height = canvas.clientHeight || window.innerHeight;
-    const cols = ['#6366f1','#10b981','#f59e0b','#ec4899','#3b82f6'];
-    const pts = Array.from({length:60}, () => ({
-      x: canvas.width/2+(Math.random()-.5)*80, y: canvas.height/2+(Math.random()-.5)*80,
-      vx:(Math.random()-.5)*11, vy:(Math.random()-1.2)*11,
-      sz:Math.random()*5+4, col:cols[Math.floor(Math.random()*cols.length)], life:1,
+    const cols = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#3b82f6'];
+    const pts = Array.from({ length: 55 }, () => ({
+      x: canvas.width / 2 + (Math.random() - 0.5) * 80,
+      y: canvas.height / 2 + (Math.random() - 0.5) * 80,
+      vx: (Math.random() - 0.5) * 11,
+      vy: (Math.random() - 1.2) * 11,
+      sz: Math.random() * 5 + 4,
+      col: cols[Math.floor(Math.random() * cols.length)],
+      life: 1,
     }));
     if (confettiAnimRef.current) cancelAnimationFrame(confettiAnimRef.current);
     const draw = () => {
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      let alive=false;
-      pts.forEach(p => {
-        p.x+=p.vx; p.y+=p.vy; p.vy+=0.26; p.life-=0.016;
-        if (p.life>0) { alive=true; ctx.globalAlpha=p.life; ctx.fillStyle=p.col; ctx.fillRect(p.x,p.y,p.sz,p.sz); }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let alive = false;
+      pts.forEach((p) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.26;
+        p.life -= 0.018;
+        if (p.life > 0) {
+          alive = true;
+          ctx.globalAlpha = p.life;
+          ctx.fillStyle = p.col;
+          ctx.fillRect(p.x, p.y, p.sz, p.sz);
+        }
       });
-      ctx.globalAlpha=1;
-      if (alive) confettiAnimRef.current=requestAnimationFrame(draw);
+      ctx.globalAlpha = 1;
+      if (alive) confettiAnimRef.current = requestAnimationFrame(draw);
     };
     draw();
   }, []);
 
-  // ─────────────────────────────────────────────────────────
-  // 6. VICTORY
-  // ─────────────────────────────────────────────────────────
   const handleVictory = useCallback(() => {
-    setStageSolved(true); stageSolvedRef.current = true;
+    setStageSolved(true);
+    stageSolvedRef.current = true;
     if (isSoundOn) playSuccessSound();
     triggerConfetti();
-    highlightLayer(null);
+    highlightLayer(null, false);
 
     const timeSpent = Math.round((Date.now() - stageStartTime) / 1000);
     const newTotal = totalSolved + 1;
     setTotalSolved(newTotal);
 
-    let rating='Steady'; let msg='Brilliant!'; let nextD = scrambleDepth;
-    if (timeSpent < 20)      { rating='Quick Reflexes'; msg='Fantastic speed!'; nextD=Math.min(scrambleDepth+1,8); }
-    else if (timeSpent <= 60){ rating='Good Pace'; msg='Great patience and focus!'; if(newTotal%2===0)nextD=Math.min(scrambleDepth+1,8); }
-    else                      { rating='Thoughtful'; msg='Wonderful effort — keeping it comfortable.'; }
+    let rating = 'Steady & Mindful';
+    let msg = 'Wonderful pattern completion!';
+    let nextD = scrambleDepth;
+
+    if (timeSpent < 20) {
+      rating = 'Quick Reflexes';
+      msg = 'Fantastic spatial control! Gently increasing stage challenge.';
+      nextD = Math.min(scrambleDepth + 1, 7);
+    } else if (timeSpent <= 60) {
+      rating = 'Comfortable Pace';
+      msg = 'Great focus and steady hand coordination!';
+      if (newTotal % 2 === 0) nextD = Math.min(scrambleDepth + 1, 7);
+    } else {
+      rating = 'Thoughtful Exploration';
+      msg = 'Great patience! Keeping the next puzzle comfortable.';
+    }
 
     setFeedback(msg);
-    setPatientStats({ avgSolveTime: Math.round(((patientStats.avgSolveTime*(newTotal-1))+timeSpent)/newTotal), rating });
+    setPatientStats({
+      avgSolveTime: Math.round(((patientStats.avgSolveTime * (newTotal - 1)) + timeSpent) / newTotal),
+      rating,
+    });
 
-    const pts = 50 + Math.max(10, 40 - Math.floor(timeSpent/2));
+    const pts = 50 + Math.max(10, 40 - Math.floor(timeSpent / 2));
     const newCoins = coins + pts;
     const newLevel = level + (nextD > scrambleDepth ? 1 : 0);
-    setCoins(newCoins); setLevel(newLevel);
+    setCoins(newCoins);
+    setLevel(newLevel);
+    setScrambleDepth(nextD);
 
-    if (syncProgress) syncProgress({
-      coins: newCoins, score: (user?.score||0)+pts,
-      gameStats: { rubiksCubeLevel: newLevel, rubikSolved: newTotal, lastPerformance: rating },
-    });
+    if (syncProgress) {
+      syncProgress({
+        coins: newCoins,
+        score: (user?.score || 0) + pts,
+        gameStats: { rubiksCubeLevel: newLevel, rubikSolved: newTotal, lastPerformance: rating },
+      });
+    }
   }, [coins, level, scrambleDepth, stageStartTime, totalSolved, user, isSoundOn, syncProgress, triggerConfetti, patientStats.avgSolveTime, highlightLayer]);
 
-  // ─────────────────────────────────────────────────────────
-  // 7. SCRAMBLE
-  // ─────────────────────────────────────────────────────────
+  // ============================================================
+  // 8. GENTLE SCRAMBLER & SMART UNDO HINT
+  // ============================================================
   const startPuzzle = useCallback(async (depth = null) => {
-    setStageSolved(false); stageSolvedRef.current = false;
-    setMoveCount(0); setHintMove(null); setActiveZone(null);
-    setStageStartTime(Date.now()); highlightLayer(null);
+    setStageSolved(false);
+    stageSolvedRef.current = false;
+    setMoveCount(0);
+    setHintMove(null);
+    setStageStartTime(Date.now());
+    highlightLayer(null, false);
+    targetRotRef.current = { x: 0.38, y: -0.55 };
+
     const d = depth !== null ? depth : scrambleDepth;
     setScrambleDepth(d);
-    const pool = ['U',"U'",'D',"D'",'R',"R'",'L',"L'",'F',"F'"];
-    const hist = [];
+    const pool = ['U', "U'", 'D', "D'", 'R', "R'", 'L', "L'", 'F', "F'"];
+    const recorded = [];
+
+    const MAP = {
+      'U':  { axis: 'y', layer:  1, angle: -Math.PI / 2 },
+      "U'": { axis: 'y', layer:  1, angle:  Math.PI / 2 },
+      'D':  { axis: 'y', layer: -1, angle:  Math.PI / 2 },
+      "D'": { axis: 'y', layer: -1, angle: -Math.PI / 2 },
+      'R':  { axis: 'x', layer:  1, angle: -Math.PI / 2 },
+      "R'": { axis: 'x', layer:  1, angle:  Math.PI / 2 },
+      'L':  { axis: 'x', layer: -1, angle:  Math.PI / 2 },
+      "L'": { axis: 'x', layer: -1, angle: -Math.PI / 2 },
+      'F':  { axis: 'z', layer:  1, angle: -Math.PI / 2 },
+      "F'": { axis: 'z', layer:  1, angle:  Math.PI / 2 },
+    };
+
     for (let i = 0; i < d; i++) {
-      const mv = pool[Math.floor(Math.random()*pool.length)];
-      hist.push(mv);
-      await executeMove(mv, false);
-      await new Promise(r => setTimeout(r, 80));
+      const mv = pool[Math.floor(Math.random() * pool.length)];
+      const info = MAP[mv];
+      recorded.push({ axis: info.axis, layer: info.layer, angle: info.angle, notation: mv });
+      await rotateLayer(info.axis, info.layer, info.angle, 160);
+      await new Promise((r) => setTimeout(r, 70));
     }
-    scrambleHistRef.current = hist;
-    setFeedback(d===1 ? 'Stage 1: Just 1 move to solve — you can do it!' : `Scrambled with ${d} moves. Take your time!`);
-  }, [executeMove, scrambleDepth, highlightLayer]);
+    moveHistoryRef.current = recorded;
+    setFeedback(
+      d === 1
+        ? 'Stage 1: Only 1 turn needed! Hover Right Hand to select a side, Pinch to lock, and Swipe!'
+        : `Stage ${level}: ${d} gentle turns to solve. Take all the time you need!`
+    );
+  }, [rotateLayer, scrambleDepth, highlightLayer, level]);
 
   useEffect(() => {
-    const t = setTimeout(() => startPuzzle(1), 600);
+    const t = setTimeout(() => startPuzzle(1), 500);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (stageSolved) return;
-    const iv = setInterval(() => setElapsedTime(Math.round((Date.now()-stageStartTime)/1000)), 1000);
+    const iv = setInterval(() => setElapsedTime(Math.round((Date.now() - stageStartTime) / 1000)), 1000);
     return () => clearInterval(iv);
   }, [stageStartTime, stageSolved]);
 
-  const giveHint = () => {
-    if (stageSolved) return;
+  // Smart Hint: Can even perform or highlight the exact inverse of the last move!
+  const giveHint = async () => {
+    if (stageSolved || isAnimRef.current) return;
     if (isSoundOn) playHintSound();
-    const inv = {'U':"U'","U'":'U','D':"D'","D'":'D','R':"R'","R'":'R','L':"L'","L'":'L','F':"F'","F'":'F','B':"B'","B'":'B'};
-    if (scrambleHistRef.current.length > 0) {
-      const last = scrambleHistRef.current[scrambleHistRef.current.length-1];
-      const r = inv[last]||'U';
-      setHintMove(r); setFeedback(`Gentle hint: Try move "${r}"`);
+
+    if (moveHistoryRef.current.length > 0) {
+      const last = moveHistoryRef.current[moveHistoryRef.current.length - 1];
+      const axisName =
+        last.axis === 'y'
+          ? last.layer === 1 ? 'Top (U)' : 'Bottom (D)'
+          : last.axis === 'x'
+          ? last.layer === 1 ? 'Right (R)' : 'Left (L)'
+          : last.layer === 1 ? 'Front (F)' : 'Back (B)';
+      setHintMove(axisName);
+      setFeedback(`💡 Hint: Select "${axisName}", pinch your right fingers, and swipe to align the colors!`);
+    } else {
+      setFeedback('💡 Hint: Hover your Right Hand on the highlighted face, pinch, and swipe!');
     }
   };
 
-  // ─────────────────────────────────────────────────────────
-  // 8. UPDATE CALLBACK REFS (no loop restarts)
-  // ─────────────────────────────────────────────────────────
+  // Keep refs updated
   useEffect(() => {
-    executeMoveRef.current = executeMove;
-    highlightRef.current   = highlightLayer;
-    stageSolvedRef.current = stageSolved;
+    executeVisualMoveRef.current = executeVisualSwipeMove;
+    executeNotationRef.current   = executeNotationMove;
+    highlightLayerRef.current    = highlightLayer;
+    stageSolvedRef.current       = stageSolved;
   });
 
-  // ─────────────────────────────────────────────────────────
-  // 9. DETECTOR INIT
-  // ─────────────────────────────────────────────────────────
+  // ============================================================
+  // 9. INITIALIZE AI HAND DETECTOR
+  // ============================================================
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -558,287 +822,483 @@ const GestureRubiksCube = () => {
       try {
         det = await handPoseDetection.createDetector(
           handPoseDetection.SupportedModels.MediaPipeHands,
-          { runtime:'mediapipe', solutionPath:'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240', modelType:'lite', maxHands:2 }
+          {
+            runtime: 'mediapipe',
+            solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240',
+            modelType: 'lite',
+            maxHands: 2,
+          }
         );
       } catch {
-        try { await tf.ready(); det = await handPoseDetection.createDetector(handPoseDetection.SupportedModels.MediaPipeHands,{runtime:'tfjs',modelType:'lite',maxHands:2}); }
-        catch { try { await tf.setBackend('cpu'); await tf.ready(); det = await handPoseDetection.createDetector(handPoseDetection.SupportedModels.MediaPipeHands,{runtime:'tfjs',modelType:'lite',maxHands:2}); } catch {} }
+        try {
+          await tf.ready();
+          det = await handPoseDetection.createDetector(
+            handPoseDetection.SupportedModels.MediaPipeHands,
+            { runtime: 'tfjs', modelType: 'lite', maxHands: 2 }
+          );
+        } catch {}
       }
-      if (!cancelled && det) { detectorRef.current = det; setDetectorReady(true); }
+      if (!cancelled && det) {
+        detectorRef.current = det;
+        setDetectorReady(true);
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // ─────────────────────────────────────────────────────────
-  // 10. GESTURE ENGINE — 320×240 paced at ~20 FPS
-  // ─────────────────────────────────────────────────────────
+  // ============================================================
+  // 10. ULTRA-FAST DUAL-HAND TRACKING ENGINE (PRE-MIRRORED 256×192)
+  // ============================================================
   useEffect(() => {
     let alive = true;
-    let tid   = null;
+    let tid = null;
 
-    // Normalise keypoint from MediaPipe (0..1) or pixel coords to 0..1
-    const norm = (kp, vw, vh) => {
-      if (!kp) return { x:0.5, y:0.5 };
-      const isN = Math.abs(kp.x) <= 1.1 && Math.abs(kp.y) <= 1.1;
-      return { x: isN ? kp.x : kp.x/vw, y: isN ? kp.y : kp.y/vh };
+    // Create tiny 256×192 offscreen canvas for ultra-fast, pre-mirrored AI inference
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = 256;
+    offCanvas.height = 192;
+    const offCtx = offCanvas.getContext('2d', { willReadFrequently: false });
+    offscreenCanvasRef.current = offCanvas;
+
+    const W = 320;
+    const H = 240;
+
+    const norm = (kp) => {
+      if (!kp) return { x: 0.5, y: 0.5 };
+      const isFrac = kp.x <= 1.05 && kp.y <= 1.05;
+      return {
+        x: isFrac ? kp.x : kp.x / 256,
+        y: isFrac ? kp.y : kp.y / 192,
+      };
     };
 
-    // Draw minimal skeleton on canvas (batched)
-    const drawSkeleton = (ctx, pts, color, W, H) => {
-      ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
-      HAND_CONNECTIONS.forEach(([a,b]) => {
-        const p1=pts[a], p2=pts[b];
-        if(p1&&p2){ ctx.moveTo(p1.x*W,p1.y*H); ctx.lineTo(p2.x*W,p2.y*H); }
+    const drawSkeleton = (ctx, pts, color) => {
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      HAND_CONNECTIONS.forEach(([a, b]) => {
+        const p1 = pts[a];
+        const p2 = pts[b];
+        if (p1 && p2) {
+          ctx.moveTo(p1.x * W, p1.y * H);
+          ctx.lineTo(p2.x * W, p2.y * H);
+        }
       });
       ctx.stroke();
-      // key joints
-      ctx.beginPath(); ctx.fillStyle = color;
-      [0,4,8].forEach(i => { const p=pts[i]; if(p){ ctx.moveTo(p.x*W+5,p.y*H); ctx.arc(p.x*W,p.y*H,5,0,Math.PI*2); } });
-      ctx.fill();
-      ctx.beginPath(); ctx.fillStyle='#fff';
-      [4,8].forEach(i => { const p=pts[i]; if(p){ ctx.moveTo(p.x*W+3,p.y*H); ctx.arc(p.x*W,p.y*H,3,0,Math.PI*2); } });
+
+      ctx.beginPath();
+      ctx.fillStyle = '#ffffff';
+      [4, 8].forEach((i) => {
+        const p = pts[i];
+        if (p) {
+          ctx.moveTo(p.x * W + 4, p.y * H);
+          ctx.arc(p.x * W, p.y * H, 4, 0, Math.PI * 2);
+        }
+      });
       ctx.fill();
     };
 
-    // Draw zone guide on the canvas
-    const drawZoneGuide = (ctx, W, H, activeZoneName) => {
+    const drawHudZones = (ctx, activeKey, isLocked) => {
+      // Right half of camera (x: 0.45..1.0) shows the 5 interactive zones clearly
+      const x0 = swapHandsRef.current ? 0 : W * 0.42;
+      const zw = W * 0.58;
+
+      // Divider line between Left Hand (Orbit) and Right Hand (Side Select & Turn)
+      ctx.save();
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(swapHandsRef.current ? W * 0.58 : W * 0.42, 0);
+      ctx.lineTo(swapHandsRef.current ? W * 0.58 : W * 0.42, H);
+      ctx.stroke();
+      ctx.restore();
+
       const zones = [
-        { label:'U – Top',    x:0,    y:0,    w:1,    h:0.28, color:'rgba(99,102,241,0.18)' },
-        { label:'L – Left',   x:0,    y:0.28, w:0.38, h:0.44, color:'rgba(16,185,129,0.18)' },
-        { label:'F – Front',  x:0.38, y:0.28, w:0.24, h:0.44, color:'rgba(245,158,11,0.18)' },
-        { label:'R – Right',  x:0.62, y:0.28, w:0.38, h:0.44, color:'rgba(239,68,68,0.18)' },
-        { label:'D – Bottom', x:0,    y:0.72, w:1,    h:0.28, color:'rgba(139,92,246,0.18)' },
+        { key: 'U', label: 'TOP (U)',   x: x0,            y: 0,        w: zw,        h: H * 0.28 },
+        { key: 'L', label: 'LEFT (L)',  x: x0,            y: H * 0.28, w: zw * 0.34, h: H * 0.44 },
+        { key: 'F', label: 'FRONT (F)', x: x0 + zw * 0.34, y: H * 0.28, w: zw * 0.32, h: H * 0.44 },
+        { key: 'R', label: 'RIGHT (R)', x: x0 + zw * 0.66, y: H * 0.28, w: zw * 0.34, h: H * 0.44 },
+        { key: 'D', label: 'BOT (D)',   x: x0,            y: H * 0.72, w: zw,        h: H * 0.28 },
       ];
-      zones.forEach(z => {
-        const isActive = activeZoneName && z.label === activeZoneName;
-        ctx.fillStyle = isActive ? z.color.replace('0.18','0.45') : z.color;
-        ctx.fillRect(z.x*W, z.y*H, z.w*W, z.h*H);
-        ctx.strokeStyle = isActive ? '#38bdf8' : 'rgba(255,255,255,0.12)';
-        ctx.lineWidth = isActive ? 2 : 1;
-        ctx.strokeRect(z.x*W, z.y*H, z.w*W, z.h*H);
-        ctx.fillStyle = isActive ? '#38bdf8' : 'rgba(255,255,255,0.5)';
-        ctx.font = `bold ${Math.round(H*0.045)}px sans-serif`;
+
+      zones.forEach((z) => {
+        const isSel = activeKey === z.key;
+        if (isSel) {
+          ctx.fillStyle = isLocked ? 'rgba(245, 158, 11, 0.42)' : 'rgba(56, 189, 248, 0.32)';
+          ctx.strokeStyle = isLocked ? '#f59e0b' : '#38bdf8';
+          ctx.lineWidth = 2.5;
+        } else {
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+          ctx.lineWidth = 1;
+        }
+        ctx.fillRect(z.x, z.y, z.w, z.h);
+        ctx.strokeRect(z.x, z.y, z.w, z.h);
+
+        ctx.fillStyle = isSel ? (isLocked ? '#fde68a' : '#e0f2fe') : 'rgba(255,255,255,0.55)';
+        ctx.font = `bold 10px sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText(z.label, (z.x+z.w/2)*W, (z.y+z.h/2)*H+5);
+        ctx.fillText(
+          isSel && isLocked ? `🔒 ${z.label}` : z.label,
+          z.x + z.w / 2,
+          z.y + z.h / 2 + 4
+        );
       });
       ctx.textAlign = 'left';
     };
 
+    let prevCount = -1;
+    let prevZoneStr = '';
+    let prevPinchBool = false;
+
     const detect = async () => {
       if (!alive) return;
-      const t0 = performance.now();
 
-      const video    = webcamRef.current?.video;
+      const video = webcamRef.current?.video;
       const detector = detectorRef.current;
-      const canvas   = canvasRef.current;
+      const canvas = hudCanvasRef.current;
 
       if (!detector || !video || video.readyState < 2 || !video.videoWidth || !canvas) {
-        tid = setTimeout(detect, 100);
+        tid = setTimeout(detect, 80);
         return;
       }
 
-      // Canvas size = 320×240 for speed
-      const W = 320, H = 240;
       if (canvas.width !== W) canvas.width = W;
       if (canvas.height !== H) canvas.height = H;
 
-      let ctx2 = ctxRef.current;
-      if (!ctx2) { ctx2 = canvas.getContext('2d', {alpha:true}); ctxRef.current = ctx2; }
+      let ctx = hudCtxRef.current;
+      if (!ctx) {
+        ctx = canvas.getContext('2d', { alpha: true });
+        hudCtxRef.current = ctx;
+      }
 
       try {
-        const hands = await detector.estimateHands(video, { flipHorizontal: true });
+        // 1. Draw mirrored video frame onto tiny 256×192 canvas (eliminates WebGL flip overhead!)
+        offCtx.save();
+        offCtx.scale(-1, 1);
+        offCtx.drawImage(video, -256, 0, 256, 192);
+        offCtx.restore();
+
+        // 2. Run detector on already-mirrored tiny canvas
+        const hands = await detector.estimateHands(offCanvas, { flipHorizontal: false });
         if (!alive) return;
 
-        ctx2.clearRect(0, 0, W, H);
+        ctx.clearRect(0, 0, W, H);
         const now = performance.now();
-        const vw = video.videoWidth || 640;
-        const vh = video.videoHeight || 480;
-        const count = hands?.length || 0;
+        const count = hands ? hands.length : 0;
 
-        // Throttle React state for hand count
-        if (now - lastCountRef.current > 400) { lastCountRef.current = now; setHandCount(count); }
+        if (count !== prevCount) {
+          prevCount = count;
+          setHandCount(count);
+        }
 
-        // Identify LEFT vs RIGHT hand
-        let leftHand  = null;
-        let rightHand = null;
-        if (count === 1) {
-          // Use handedness label if available, else use x position
-          const h = hands[0];
-          const hl = h.handedness?.toLowerCase?.();
-          // In mirrored video left→right hand
-          if (hl === 'left' || hl === 'right') {
-            // MediaPipe: 'Left' in original = patient's right after mirror flip
-            if (hl === 'right') leftHand = h; else rightHand = h;
+        // Convert all detected hands to normalized screen coordinates (0 = Left of screen, 1 = Right of screen)
+        const parsedHands = (hands || []).map((h) => {
+          const pts = h.keypoints.map(norm);
+          const palm = pts[9] || pts[0];
+          return { pts, palmX: palm.x, palmY: palm.y };
+        });
+
+        let leftHand = null;  // Revolves/Orbits the 3D cube
+        let rightHand = null; // Selects side (when open) & Pinches+Swipes to rotate side
+
+        const isSwapped = swapHandsRef.current;
+
+        if (parsedHands.length >= 2) {
+          // Sort left-to-right on screen: smaller X is on the LEFT of screen, larger X is on the RIGHT
+          parsedHands.sort((a, b) => a.palmX - b.palmX);
+          leftHand  = isSwapped ? parsedHands[1] : parsedHands[0];
+          rightHand = isSwapped ? parsedHands[0] : parsedHands[1];
+
+          handMemoryRef.current.left  = { x: leftHand.palmX,  y: leftHand.palmY,  lastSeen: now };
+          handMemoryRef.current.right = { x: rightHand.palmX, y: rightHand.palmY, lastSeen: now };
+        } else if (parsedHands.length === 1) {
+          const single = parsedHands[0];
+          // If currently pinched & locked on right hand, keep it as rightHand even if swiping across center!
+          if (isPinchedRef.current && now - handMemoryRef.current.right.lastSeen < 500) {
+            rightHand = single;
+            handMemoryRef.current.right = { x: single.palmX, y: single.palmY, lastSeen: now };
           } else {
-            // Fallback: wrist x < 0.5 → left side of mirrored image → patient's right
-            const wx = norm(h.keypoints[0], vw, vh).x;
-            if (wx < 0.5) rightHand = h; else leftHand = h;
-          }
-        } else if (count >= 2) {
-          hands.forEach(h => {
-            const hl = h.handedness?.toLowerCase?.();
-            if (hl === 'right') leftHand  = h;
-            else if (hl === 'left') rightHand = h;
-          });
-          // Fallback if handedness missing
-          if (!leftHand && !rightHand) {
-            const sorted = [...hands].sort((a,b)=> norm(a.keypoints[0],vw,vh).x - norm(b.keypoints[0],vw,vh).x);
-            rightHand = sorted[0]; leftHand = sorted[1];
+            // Screen split: Left side of screen (< 0.45) = Left Hand, Right side (>= 0.45) = Right Hand
+            const onRightSide = isSwapped ? single.palmX < 0.55 : single.palmX >= 0.42;
+            if (onRightSide) {
+              rightHand = single;
+              handMemoryRef.current.right = { x: single.palmX, y: single.palmY, lastSeen: now };
+            } else {
+              leftHand = single;
+              handMemoryRef.current.left = { x: single.palmX, y: single.palmY, lastSeen: now };
+            }
           }
         }
 
-        // ── LEFT HAND = Orbit Cube ────────────────────────
+        const activeZoneObj = lockedZoneRef.current || hoveredZoneRef.current;
+        drawHudZones(ctx, activeZoneObj?.key || null, isPinchedRef.current);
+
+        // ── PROCESS LEFT HAND: SMOOTH CUBE ORBIT ──────────────────────
         if (leftHand) {
-          const kps = leftHand.keypoints.map(k => norm(k, vw, vh));
-          drawSkeleton(ctx2, kps, '#06b6d4', W, H);
-          const palm = kps[9];
-          const sm = leftSmoother.current.filter(palm.x, palm.y);
-          if (prevLeftRef.current && !isAnimRef.current) {
-            const dx = (sm.x - prevLeftRef.current.x) * W;
-            const dy = (sm.y - prevLeftRef.current.y) * H;
-            const DEAD = 1.5; // px dead-zone to ignore tiny jitter
-            if (Math.abs(dx) > DEAD) targetRotRef.current.y += dx * 0.018;
-            if (Math.abs(dy) > DEAD) targetRotRef.current.x += dy * 0.018;
+          const kps = leftHand.pts;
+          drawSkeleton(ctx, kps, '#06b6d4');
+
+          const sm = leftSmoothRef.current.filter(leftHand.palmX, leftHand.palmY);
+          if (prevLeftPosRef.current) {
+            const dx = (sm.x - prevLeftPosRef.current.x) * W;
+            const dy = (sm.y - prevLeftPosRef.current.y) * H;
+            // Smooth deadzone to ignore involuntary hand tremor
+            if (Math.abs(dx) > 1.1) targetRotRef.current.y += dx * 0.017;
+            if (Math.abs(dy) > 1.1) {
+              // Clamp vertical tilt so cube never flips upside-down
+              targetRotRef.current.x = Math.max(-0.8, Math.min(0.8, targetRotRef.current.x + dy * 0.015));
+            }
           }
-          prevLeftRef.current = { x: sm.x, y: sm.y };
-          // Label
-          ctx2.fillStyle='rgba(6,182,212,0.85)'; ctx2.font=`bold ${Math.round(H*0.048)}px sans-serif`;
-          ctx2.fillText('◀ ORBIT', Math.round(kps[0].x*W)+8, Math.round(kps[0].y*H)-8);
-        } else {
-          leftSmoother.current.reset();
-          prevLeftRef.current = null;
+          prevLeftPosRef.current = { x: sm.x, y: sm.y };
+
+          // Wrist badge
+          ctx.fillStyle = '#06b6d4';
+          ctx.font = 'bold 10px sans-serif';
+          ctx.fillText('✋ LEFT: ORBIT', Math.max(6, kps[0].x * W - 30), Math.max(14, kps[0].y * H - 10));
+        } else if (now - handMemoryRef.current.left.lastSeen > 300) {
+          leftSmoothRef.current.reset();
+          prevLeftPosRef.current = null;
         }
 
-        // ── RIGHT HAND = Zone + Swipe ─────────────────────
+        // ── PROCESS RIGHT HAND: HOVER TO SELECT -> PINCH TO LOCK -> SWIPE TO TURN ──
         if (rightHand) {
-          const kps = rightHand.keypoints.map(k => norm(k, vw, vh));
+          const kps = rightHand.pts;
+          const thumbTip = kps[4];
           const indexTip = kps[8];
-          const sm = rightSmoother.current.filter(indexTip.x, indexTip.y);
+          const wrist    = kps[0];
+          const midMcp   = kps[9];
 
-          // Determine zone from smoothed index tip
-          const zone = getLayerFromZone(sm.x, sm.y);
+          // Midpoint between thumb & index finger is the most stable control point
+          const ctrlX = (thumbTip.x + indexTip.x) * 0.5;
+          const ctrlY = (thumbTip.y + indexTip.y) * 0.5;
+          const sm = rightSmoothRef.current.filter(ctrlX, ctrlY);
 
-          // Update zone display + highlight
-          if (!currentZoneRef.current || currentZoneRef.current.name !== zone.name) {
-            currentZoneRef.current = zone;
-            setActiveZone(zone.name);
-            if (highlightRef.current) highlightRef.current(zone);
-          }
+          // Scale-invariant pinch detection (normalized by palm size so distance to camera doesn't matter)
+          const palmSize = Math.max(0.08, Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y));
+          const rawPinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+          const pinchRatio = rawPinchDist / palmSize;
 
-          // Draw zone guide
-          drawZoneGuide(ctx2, W, H, zone.name);
-          drawSkeleton(ctx2, kps, '#10b981', W, H);
+          // Hysteresis: engage pinch at < 0.48, release pinch at > 0.62
+          const wasPinched = isPinchedRef.current;
+          const nowPinched = wasPinched ? pinchRatio < 0.62 : pinchRatio < 0.48;
 
-          // Swipe detection
-          const ct = Date.now();
-          if (!swipeStartRef.current) {
-            swipeStartRef.current = { x: sm.x, y: sm.y, t: ct };
-            swipeLockRef.current = false;
-          } else if (!swipeLockRef.current && ct - lastMoveRef.current > 500 && !isAnimRef.current && !stageSolvedRef.current) {
-            const dragX = (sm.x - swipeStartRef.current.x) * W;
-            const dragY = (sm.y - swipeStartRef.current.y) * H;
-            const SWIPE = 28; // px minimum swipe
-            const move = zone.move;
+          if (!nowPinched) {
+            // ── STATE 1: RIGHT HAND OPEN (SELECTING SIDE ONLY) ──
+            if (wasPinched) {
+              isPinchedRef.current = false;
+              lockedZoneRef.current = null;
+              pinchAnchorRef.current = null;
+              swipeDoneInPinchRef.current = false;
+            }
 
-            if (Math.abs(dragX) > SWIPE && Math.abs(dragX) > Math.abs(dragY)) {
-              swipeLockRef.current = true;
-              lastMoveRef.current = ct;
-              swipeStartRef.current = null;
-              const notation = dragX < 0 ? move.cw : move.ccw;
-              setSwipeDir(dragX < 0 ? '← CW' : '→ CCW');
-              setTimeout(() => setSwipeDir(null), 800);
-              if (executeMoveRef.current) executeMoveRef.current(notation);
-            } else if (Math.abs(dragY) > SWIPE && Math.abs(dragY) > Math.abs(dragX)) {
-              swipeLockRef.current = true;
-              lastMoveRef.current = ct;
-              swipeStartRef.current = null;
-              const notation = dragY < 0 ? move.cw : move.ccw;
-              setSwipeDir(dragY < 0 ? '↑ CW' : '↓ CCW');
-              setTimeout(() => setSwipeDir(null), 800);
-              if (executeMoveRef.current) executeMoveRef.current(notation);
+            // Compute relative X inside the Right-Hand zone area (0..1)
+            const regionStart = isSwapped ? 0 : 0.42;
+            const regionWidth = 0.58;
+            const relX = Math.max(0, Math.min(1, (sm.x - regionStart) / regionWidth));
+            const zone = getZoneFromRightHand(relX, sm.y);
+            hoveredZoneRef.current = zone;
+
+            if (highlightLayerRef.current) highlightLayerRef.current(zone.key, false);
+
+            // Draw open-hand selection cursor
+            drawSkeleton(ctx, kps, '#10b981');
+            ctx.beginPath();
+            ctx.arc(sm.x * W, sm.y * H, 10, 0, Math.PI * 2);
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+          } else {
+            // ── STATE 2: RIGHT HAND PINCHED (SIDE LOCKED + SWIPE TO ROTATE) ──
+            if (!wasPinched) {
+              // Just pinched! Lock the currently hovered zone
+              isPinchedRef.current = true;
+              const regionStart = isSwapped ? 0 : 0.42;
+              const relX = Math.max(0, Math.min(1, (sm.x - regionStart) / 0.58));
+              lockedZoneRef.current = hoveredZoneRef.current || getZoneFromRightHand(relX, sm.y);
+              pinchAnchorRef.current = { x: sm.x, y: sm.y };
+              swipeDoneInPinchRef.current = false;
+              if (isSoundOn) playLockSound();
+            }
+
+            const locked = lockedZoneRef.current;
+            if (locked && highlightLayerRef.current) {
+              highlightLayerRef.current(locked.key, true);
+            }
+
+            drawSkeleton(ctx, kps, '#f59e0b');
+
+            // Draw Pinch Anchor & Live Swipe Vector Line
+            if (pinchAnchorRef.current) {
+              const ax = pinchAnchorRef.current.x * W;
+              const ay = pinchAnchorRef.current.y * H;
+              const cx = sm.x * W;
+              const cy = sm.y * H;
+
+              // Anchor ring
+              ctx.beginPath();
+              ctx.arc(ax, ay, 7, 0, Math.PI * 2);
+              ctx.fillStyle = 'rgba(245, 158, 11, 0.5)';
+              ctx.fill();
+
+              // Swipe line
+              ctx.beginPath();
+              ctx.moveTo(ax, ay);
+              ctx.lineTo(cx, cy);
+              ctx.strokeStyle = '#fbbf24';
+              ctx.lineWidth = 3.5;
+              ctx.stroke();
+
+              // Current pinched cursor
+              ctx.beginPath();
+              ctx.arc(cx, cy, 13, 0, Math.PI * 2);
+              ctx.strokeStyle = '#f59e0b';
+              ctx.lineWidth = 3;
+              ctx.stroke();
+
+              // Check swipe distance while pinched
+              if (!swipeDoneInPinchRef.current && !isAnimRef.current && Date.now() - lastMoveTimeRef.current > 380) {
+                const dx = cx - ax;
+                const dy = cy - ay;
+                const SWIPE_PX = 24; // Smooth 24px swipe threshold
+
+                if (Math.hypot(dx, dy) >= SWIPE_PX) {
+                  swipeDoneInPinchRef.current = true;
+                  lastMoveTimeRef.current = Date.now();
+                  // Re-anchor so user can either unpinch OR swipe again after cooldown
+                  pinchAnchorRef.current = { x: sm.x, y: sm.y };
+
+                  const isHoriz = Math.abs(dx) >= Math.abs(dy);
+                  const dirArrow = isHoriz ? (dx > 0 ? '→' : '←') : (dy > 0 ? '↓' : '↑');
+                  setSwipeToast(`${locked.short} ${dirArrow}`);
+                  setTimeout(() => setSwipeToast(null), 750);
+
+                  if (executeVisualMoveRef.current) {
+                    executeVisualMoveRef.current(locked.key, isHoriz ? dx : 0, isHoriz ? 0 : dy);
+                  }
+                }
+              }
             }
           }
 
-          // Reset swipe start if hand stayed still for > 600ms
-          if (swipeStartRef.current && ct - swipeStartRef.current.t > 600) {
-            swipeStartRef.current = { x: sm.x, y: sm.y, t: ct };
+          // Update React UI badges only when zone or pinch state actually changes
+          const curZone = (lockedZoneRef.current || hoveredZoneRef.current)?.label || '';
+          if (curZone !== prevZoneStr) {
+            prevZoneStr = curZone;
+            setActiveZone(curZone);
           }
-
-          ctx2.fillStyle='rgba(16,185,129,0.85)'; ctx2.font=`bold ${Math.round(H*0.048)}px sans-serif`;
-          ctx2.textAlign='right';
-          ctx2.fillText('TURN ▶', Math.round(kps[0].x*W)-8, Math.round(kps[0].y*H)-8);
-          ctx2.textAlign='left';
-        } else {
-          rightSmoother.current.reset();
-          swipeStartRef.current = null;
-          swipeLockRef.current  = false;
-          currentZoneRef.current = null;
-          setActiveZone(null);
-          if (highlightRef.current) highlightRef.current(null);
-          // Draw zone guide even without hand (greyed out)
-          drawZoneGuide(ctx2, W, H, null);
+          if (nowPinched !== prevPinchBool) {
+            prevPinchBool = nowPinched;
+            setIsPinchedUI(nowPinched);
+          }
+        } else if (now - handMemoryRef.current.right.lastSeen > 350) {
+          // Grace period expired for Right Hand
+          rightSmoothRef.current.reset();
+          isPinchedRef.current = false;
+          lockedZoneRef.current = null;
+          hoveredZoneRef.current = null;
+          pinchAnchorRef.current = null;
+          swipeDoneInPinchRef.current = false;
+          if (prevZoneStr !== '') {
+            prevZoneStr = '';
+            setActiveZone(null);
+          }
+          if (prevPinchBool !== false) {
+            prevPinchBool = false;
+            setIsPinchedUI(false);
+          }
+          if (highlightLayerRef.current) highlightLayerRef.current(null, false);
         }
-
-        if (!leftHand && !rightHand) {
-          drawZoneGuide(ctx2, W, H, null);
-        }
-      } catch {
-        /* continue */
+      } catch (e) {
+        // Ignore transient frame error
       }
 
-      const elapsed = performance.now() - t0;
-      // Target ~20 FPS (50ms) — leaves plenty of CPU for Three.js 60 FPS
-      const delay = Math.max(10, 50 - elapsed);
-      if (alive) tid = setTimeout(detect, delay);
+      // Guaranteed 32ms breathing room after inference so Three.js always renders at a locked 60 FPS!
+      if (alive) {
+        tid = setTimeout(() => {
+          if (alive) requestAnimationFrame(detect);
+        }, 32);
+      }
     };
 
     detect();
-    return () => { alive = false; if (tid) clearTimeout(tid); };
-  }, []); // stable deps — uses refs throughout
+    return () => {
+      alive = false;
+      if (tid) clearTimeout(tid);
+    };
+  }, [isSoundOn]);
 
-  // ─────────────────────────────────────────────────────────
-  // MOUSE ORBIT FALLBACK
-  // ─────────────────────────────────────────────────────────
-  const onMouseDown = e => { isDraggingRef.current=true; prevMouseRef.current={x:e.clientX,y:e.clientY}; };
-  const onMouseMove = e => {
-    if (!isDraggingRef.current) return;
-    const dx=e.clientX-prevMouseRef.current.x; const dy=e.clientY-prevMouseRef.current.y;
-    targetRotRef.current.y += dx*0.008; targetRotRef.current.x += dy*0.008;
-    prevMouseRef.current={x:e.clientX,y:e.clientY};
+  // ============================================================
+  // 11. MOUSE ORBIT FALLBACK
+  // ============================================================
+  const onMouseDown = (e) => {
+    isDraggingRef.current = true;
+    prevMouseRef.current = { x: e.clientX, y: e.clientY };
   };
-  const onMouseUp = () => { isDraggingRef.current=false; };
-  const resetView = () => { targetRotRef.current={x:0.4,y:0.6}; };
+  const onMouseMove = (e) => {
+    if (!isDraggingRef.current) return;
+    const dx = e.clientX - prevMouseRef.current.x;
+    const dy = e.clientY - prevMouseRef.current.y;
+    targetRotRef.current.y += dx * 0.008;
+    targetRotRef.current.x = Math.max(-0.8, Math.min(0.8, targetRotRef.current.x + dy * 0.008));
+    prevMouseRef.current = { x: e.clientX, y: e.clientY };
+  };
+  const onMouseUp = () => {
+    isDraggingRef.current = false;
+  };
+  const resetView = () => {
+    targetRotRef.current = { x: 0.38, y: -0.55 };
+  };
 
-  const fmt = s => { const m=Math.floor(s/60); return `${m}:${s%60<10?'0':''}${s%60}`; };
+  const fmt = (s) => {
+    const m = Math.floor(s / 60);
+    return `${m}:${s % 60 < 10 ? '0' : ''}${s % 60}`;
+  };
 
-  // ─────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col select-none relative overflow-hidden">
-      {/* Confetti */}
+      {/* Celebration Confetti */}
       <canvas ref={confettiCanvasRef} className="absolute inset-0 pointer-events-none z-50 w-full h-full" />
 
-      {/* How To Play Modal */}
+      {/* How To Play Modal (Shown at start of game) */}
       {showHowTo && <HowToPlayModal onClose={() => setShowHowTo(false)} />}
 
       {/* ── HEADER ── */}
-      <header className="bg-slate-800/80 backdrop-blur-md border-b border-slate-700/60 px-4 py-3 flex items-center justify-between z-30">
+      <header className="bg-slate-800/80 backdrop-blur-md border-b border-slate-700/60 px-4 py-2.5 flex items-center justify-between z-30">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/games')} className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 flex items-center gap-1 text-sm font-semibold">
+          <button
+            onClick={() => navigate('/games')}
+            className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 flex items-center gap-1 text-sm font-semibold"
+          >
             <ArrowLeft className="w-4 h-4" /> Games
           </button>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-lg font-black bg-gradient-to-r from-amber-400 via-rose-400 to-indigo-400 bg-clip-text text-transparent">Gesture Rubik's Cube</h1>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Stage {level}</span>
+              <h1 className="text-lg font-black bg-gradient-to-r from-amber-400 via-rose-400 to-indigo-400 bg-clip-text text-transparent">
+                Gesture Rubik's Cube
+              </h1>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                Stage {level}
+              </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Left hand ← Orbit &nbsp;|&nbsp; Right hand → Select zone &amp; Swipe to turn
+              ✋ Left Hand: Orbit Cube &nbsp;•&nbsp; 👆 Right Hand Open: Select Side &nbsp;•&nbsp; 🤏 Pinch &amp; Swipe: Rotate Side
             </p>
           </div>
         </div>
+
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowHowTo(true)}
+            className="px-3 py-1.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-xs font-bold text-indigo-300 flex items-center gap-1.5"
+          >
+            <Hand className="w-3.5 h-3.5" /> How to Play
+          </button>
           <div className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
             <Trophy className="w-3.5 h-3.5 text-amber-400" /> Lv {level}
           </div>
@@ -848,65 +1308,91 @@ const GestureRubiksCube = () => {
           <div className="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300">
             ⏱ {fmt(elapsedTime)}
           </div>
-          <button onClick={() => setShowHowTo(true)} className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300" title="How to play">
-            <Hand className="w-4 h-4 text-indigo-400" />
-          </button>
-          <button onClick={() => setIsSoundOn(!isSoundOn)} className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300">
+          <button
+            onClick={() => setIsSoundOn(!isSoundOn)}
+            className="p-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300"
+          >
             {isSoundOn ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
           </button>
         </div>
       </header>
 
-      {/* ── MAIN ── */}
+      {/* ── MAIN WORKSPACE ── */}
       <div className="flex-1 flex flex-col lg:flex-row relative overflow-hidden">
-
-        {/* 3D Cube Area */}
+        {/* 3D Cube Viewport */}
         <div
           ref={mountRef}
-          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
-          className="flex-1 w-full h-[55vh] lg:h-auto cursor-grab active:cursor-grabbing relative bg-gradient-to-b from-slate-900 to-slate-950"
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          className="flex-1 w-full h-[54vh] lg:h-auto cursor-grab active:cursor-grabbing relative bg-gradient-to-b from-slate-900 to-slate-950"
         >
-          {/* Overlay controls */}
+          {/* Top-Left Quick Actions */}
           <div className="absolute top-3 left-3 z-20 flex flex-wrap gap-2">
-            <button onClick={resetView} className="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 text-xs font-bold text-slate-300 flex items-center gap-1.5">
+            <button
+              onClick={resetView}
+              className="px-3 py-1.5 rounded-xl bg-slate-800/85 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-300 flex items-center gap-1.5"
+            >
               <Compass className="w-3.5 h-3.5 text-indigo-400" /> Reset View
             </button>
-            <button onClick={giveHint} className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-bold text-amber-300 flex items-center gap-1.5">
+            <button
+              onClick={giveHint}
+              className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-bold text-amber-300 flex items-center gap-1.5"
+            >
               <Lightbulb className="w-3.5 h-3.5 text-amber-400" /> Hint
             </button>
           </div>
 
-          {/* Active zone + swipe indicator */}
+          {/* Live Selection & Pinch-Lock Status Banner */}
           <div className="absolute top-3 right-3 z-20 flex flex-col gap-2 items-end">
-            {activeZone && (
-              <div className="px-3 py-1.5 rounded-xl bg-sky-500/20 border border-sky-500/40 text-xs font-bold text-sky-300 animate-pulse">
-                🎯 {activeZone}
+            {activeZone ? (
+              <div
+                className={`px-3.5 py-2 rounded-2xl border text-xs font-bold flex items-center gap-2 shadow-lg transition-all ${
+                  isPinchedUI
+                    ? 'bg-amber-500/25 border-amber-400 text-amber-200 ring-2 ring-amber-400/40'
+                    : 'bg-sky-500/20 border-sky-500/40 text-sky-200'
+                }`}
+              >
+                {isPinchedUI ? <Lock className="w-4 h-4 text-amber-400" /> : <Unlock className="w-4 h-4 text-sky-400" />}
+                <span>
+                  {isPinchedUI
+                    ? `LOCKED: ${activeZone} — Swipe ← → ↑ ↓ to Turn!`
+                    : `Selecting: ${activeZone} (Pinch to Lock)`}
+                </span>
+              </div>
+            ) : (
+              <div className="px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-xs text-slate-400">
+                Raise Right Hand to select a side
               </div>
             )}
-            {swipeDir && (
-              <div className="px-3 py-1.5 rounded-xl bg-emerald-500/30 border border-emerald-500/60 text-sm font-black text-emerald-300">
-                {swipeDir}
+
+            {swipeToast && (
+              <div className="px-4 py-1.5 rounded-xl bg-emerald-500 text-slate-950 font-black text-sm shadow-lg">
+                Rotated {swipeToast}
               </div>
             )}
+
             {hintMove && (
-              <div className="px-3 py-1.5 rounded-xl bg-amber-500/30 border border-amber-500/60 text-xs font-bold text-amber-300 animate-bounce">
-                Hint: {hintMove}
+              <div className="px-3 py-1.5 rounded-xl bg-amber-500/30 border border-amber-400 text-xs font-bold text-amber-200">
+                💡 Try turning: {hintMove}
               </div>
             )}
           </div>
 
-          {/* Victory Overlay */}
+          {/* Stage Solved Celebration Modal */}
           {stageSolved && (
             <div className="absolute inset-0 z-40 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-slate-800 border border-slate-700 rounded-3xl p-7 max-w-sm w-full text-center shadow-2xl">
                 <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto mb-3">
                   <CheckCircle2 className="w-9 h-9" />
                 </div>
-                <h2 className="text-2xl font-black text-white">Stage {level} Solved!</h2>
-                <p className="text-xs text-slate-400 mt-1">Completed in {fmt(elapsedTime)} with {moveCount} moves.</p>
+                <h2 className="text-2xl font-black text-white">Stage {level} Complete!</h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Solved in {fmt(elapsedTime)} with {moveCount} moves.
+                </p>
                 <div className="my-4 p-3 rounded-2xl bg-slate-900/60 border border-slate-700/60 text-xs space-y-1.5">
                   <div className="flex justify-between text-slate-400">
-                    <span>Performance:</span>
+                    <span>Cognitive Pace:</span>
                     <span className="font-bold text-emerald-400">{patientStats.rating}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
@@ -925,101 +1411,115 @@ const GestureRubiksCube = () => {
           )}
         </div>
 
-        {/* Sidebar */}
-        <aside className="w-full lg:w-[22rem] bg-slate-800/90 border-t lg:border-t-0 lg:border-l border-slate-700/60 p-4 flex flex-col gap-4 z-20">
-
-          {/* Camera + overlay canvas */}
-          <div className="space-y-2">
+        {/* Right Sidebar: Camera HUD & Controls */}
+        <aside className="w-full lg:w-[23rem] bg-slate-800/90 border-t lg:border-t-0 lg:border-l border-slate-700/60 p-4 flex flex-col gap-3.5 z-20">
+          {/* Camera Feed + Interactive Zone Overlay */}
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Camera className="w-3.5 h-3.5 text-indigo-400" /> Hand Tracking
+                <Camera className="w-3.5 h-3.5 text-indigo-400" /> Vision Tracking
               </span>
               <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${!detectorReady ? 'bg-amber-400 animate-ping' : handCount > 0 ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-                <span className="text-[11px] text-slate-400">{!detectorReady ? 'Loading AI…' : handCount > 0 ? `${handCount} Hand${handCount>1?'s':''} ✓` : 'No hands'}</span>
-                <button onClick={() => setShowCam(!showCam)} className="text-[10px] text-slate-500 hover:text-slate-300">
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    !detectorReady ? 'bg-amber-400 animate-ping' : handCount > 0 ? 'bg-emerald-400' : 'bg-rose-400'
+                  }`}
+                />
+                <span className="text-[11px] text-slate-300 font-semibold">
+                  {!detectorReady ? 'Loading AI…' : handCount > 0 ? `${handCount} Hand${handCount > 1 ? 's' : ''} Active` : 'Show Hands'}
+                </span>
+                <button
+                  onClick={() => setSwapHands(!swapHands)}
+                  className="text-[10px] px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 font-semibold"
+                  title="Flip Left/Right hand sides if your camera is inverted"
+                >
+                  Swap L/R
+                </button>
+                <button onClick={() => setShowCam(!showCam)} className="text-[10px] text-slate-400 hover:text-slate-200">
                   {showCam ? 'Hide' : 'Show'}
                 </button>
               </div>
             </div>
 
             {showCam && (
-              <div className="relative w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-700/80 shadow-inner" style={{aspectRatio:'4/3'}}>
+              <div
+                className="relative w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-700/80 shadow-inner"
+                style={{ aspectRatio: '4/3' }}
+              >
                 <Webcam
-                  ref={webcamRef} audio={false} mirrored={true}
-                  width={320} height={240}
-                  videoConstraints={{ facingMode:'user', width:320, height:240 }}
+                  ref={webcamRef}
+                  audio={false}
+                  mirrored={true}
+                  width={320}
+                  height={240}
+                  videoConstraints={{ facingMode: 'user', width: { ideal: 320 }, height: { ideal: 240 } }}
                   className="absolute inset-0 w-full h-full object-cover opacity-80"
-                  onUserMedia={() => {}}
-                  onUserMediaError={e => console.error('Cam error:', e)}
                 />
                 <canvas
-                  ref={canvasRef} width={320} height={240}
+                  ref={hudCanvasRef}
+                  width={320}
+                  height={240}
                   className="absolute inset-0 w-full h-full pointer-events-none z-10"
                 />
-                {/* Legend */}
-                <div className="absolute bottom-2 left-2 right-2 z-20 bg-slate-900/80 backdrop-blur-sm rounded-lg px-2.5 py-1 text-[10px] text-slate-300 flex justify-between border border-slate-700/40">
-                  <span className="text-cyan-300 font-semibold">◀ Left: Orbit</span>
-                  <span className="text-emerald-300 font-semibold">Right: Turn ▶</span>
+                <div className="absolute bottom-1.5 left-2 right-2 z-20 bg-slate-900/85 rounded-lg px-2.5 py-1 text-[10px] flex justify-between border border-slate-700/50">
+                  <span className="text-cyan-300 font-bold">
+                    {swapHands ? '👈 Left Side: Pinch & Turn' : '👈 Left Side: Orbit Cube'}
+                  </span>
+                  <span className="text-amber-300 font-bold">
+                    {swapHands ? 'Right Side: Orbit Cube 👉' : 'Right Side: Pinch & Turn 👉'}
+                  </span>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Cognitive feedback */}
+          {/* Step-by-Step Mini Guide */}
+          <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-700/60 text-[11px] space-y-1.5">
+            <div className="flex items-center gap-2 text-cyan-300 font-semibold">
+              <span>1.</span>
+              <span><strong>Left Hand:</strong> Move smoothly to revolve the whole cube.</span>
+            </div>
+            <div className="flex items-center gap-2 text-sky-300 font-semibold">
+              <span>2.</span>
+              <span><strong>Right Hand (Open):</strong> Hover over a zone to choose which side to turn.</span>
+            </div>
+            <div className="flex items-center gap-2 text-amber-300 font-semibold">
+              <span>3.</span>
+              <span><strong>Pinch &amp; Swipe:</strong> Pinch thumb + index to LOCK side, then swipe ← → ↑ ↓!</span>
+            </div>
+          </div>
+
+          {/* Cognitive Feedback */}
           <div className="p-3 rounded-2xl bg-indigo-950/40 border border-indigo-900/60 text-xs">
-            <div className="flex items-center gap-1.5 font-bold text-indigo-300 mb-1">
-              <Sparkles className="w-3.5 h-3.5" /> Cognitive Feedback
+            <div className="flex items-center justify-between font-bold text-indigo-300 mb-1">
+              <span className="flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5" /> Therapy Guide
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Scramble: {scrambleDepth} | Moves: {moveCount}
+              </span>
             </div>
             <p className="text-slate-300 text-[11px] leading-relaxed">{feedback}</p>
-            <div className="mt-2 flex justify-between text-[11px] text-slate-400 pt-1.5 border-t border-indigo-900/40">
-              <span>Scramble: <strong>{scrambleDepth} move{scrambleDepth>1?'s':''}</strong></span>
-              <span>Turns: <strong>{moveCount}</strong></span>
-            </div>
           </div>
 
-          {/* Quick zone guide */}
-          <div className="p-3 rounded-2xl bg-slate-900/50 border border-slate-700/60 text-xs space-y-2">
-            <p className="font-bold text-slate-300 text-[11px]">Right Hand Zones:</p>
-            <div className="grid grid-cols-3 gap-1 text-center text-[10px]">
-              {[
-                {label:'U – Top',    color:'bg-indigo-500/30 text-indigo-300', span:'col-span-3'},
-                {label:'L – Left',   color:'bg-emerald-500/30 text-emerald-300'},
-                {label:'F – Front',  color:'bg-amber-500/30 text-amber-300'},
-                {label:'R – Right',  color:'bg-red-500/30 text-red-300'},
-                {label:'D – Bottom', color:'bg-purple-500/30 text-purple-300', span:'col-span-3'},
-              ].map(z => (
-                <div key={z.label} className={`py-1 px-1 rounded-lg font-bold ${z.color} ${z.span||''} ${activeZone===z.label?'ring-1 ring-sky-400':''}`}>
-                  {z.label}
-                </div>
-              ))}
-            </div>
-            <p className="text-slate-500 text-[10px] text-center">Move right hand into a zone, then swipe ← → ↑ ↓</p>
-          </div>
-
-          {/* Accessible move buttons */}
-          <div className="space-y-2">
-            <div className="flex justify-between items-center text-xs text-slate-400 font-semibold">
-              <span>Button Controls (backup)</span>
-              {hintMove && <span className="text-amber-400 font-bold animate-pulse">Try: {hintMove}</span>}
+          {/* Backup Click Buttons */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center text-[11px] text-slate-400 font-semibold">
+              <span>Manual Layer Buttons (Optional)</span>
             </div>
             <div className="grid grid-cols-4 gap-1.5">
               {[
-                {l:'U', n:'Top↻'},{l:"U'",n:'Top↺'},
-                {l:'D', n:'Bot↻'},{l:"D'",n:'Bot↺'},
-                {l:'R', n:'Rt↻'}, {l:"R'",n:'Rt↺'},
-                {l:'L', n:'Lt↻'}, {l:"L'",n:'Lt↺'},
-                {l:'F', n:'Fr↻'}, {l:"F'",n:'Fr↺'},
-                {l:'B', n:'Bk↻'}, {l:"B'",n:'Bk↺'},
-              ].map(btn => (
+                { l: "U'", n: 'Top →' },  { l: 'U',  n: 'Top ←' },
+                { l: 'D',  n: 'Bot →' },  { l: "D'", n: 'Bot ←' },
+                { l: 'R',  n: 'Right ↑' },{ l: "R'", n: 'Right ↓' },
+                { l: "L'", n: 'Left ↑' }, { l: 'L',  n: 'Left ↓' },
+                { l: 'F',  n: 'Front ↻' },{ l: "F'", n: 'Front ↺' },
+                { l: "B'", n: 'Back ↻' }, { l: 'B',  n: 'Back ↺' },
+              ].map((btn) => (
                 <button
                   key={btn.l}
-                  onClick={() => executeMove(btn.l)}
-                  className={`py-2 px-1 rounded-xl text-[11px] font-bold transition-all border ${
-                    hintMove===btn.l
-                      ? 'bg-amber-500 text-slate-900 border-amber-400 ring-2 ring-amber-400/50 scale-105 shadow-lg'
-                      : 'bg-slate-700/60 hover:bg-slate-700 text-slate-200 border-slate-600/60'
-                  }`}
+                  onClick={() => executeNotationMove(btn.l)}
+                  className="py-1.5 px-1 rounded-xl text-[11px] font-bold bg-slate-700/60 hover:bg-slate-700 text-slate-200 border border-slate-600/60 transition-all"
                 >
                   {btn.n}
                 </button>
@@ -1027,12 +1527,18 @@ const GestureRubiksCube = () => {
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex gap-2">
-            <button onClick={() => startPuzzle(null)} className="flex-1 py-2.5 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-slate-600/60">
+          {/* Bottom Actions */}
+          <div className="flex gap-2 mt-auto">
+            <button
+              onClick={() => startPuzzle(null)}
+              className="flex-1 py-2.5 rounded-xl bg-slate-700/60 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-slate-600/60"
+            >
               <RefreshCw className="w-3.5 h-3.5" /> Reshuffle
             </button>
-            <button onClick={giveHint} className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md">
+            <button
+              onClick={giveHint}
+              className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md"
+            >
               <Lightbulb className="w-3.5 h-3.5" /> Hint
             </button>
           </div>
