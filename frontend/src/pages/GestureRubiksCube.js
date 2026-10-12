@@ -114,10 +114,10 @@ function HowToPlayModal({ onClose }) {
   const steps = [
     {
       icon: '✋',
-      badge: 'LEFT HAND',
+      badge: 'LEFT HAND (OPEN / PUNCH)',
       color: 'text-cyan-400 bg-cyan-500/15 border-cyan-500/30',
-      title: 'Revolve the Entire Cube',
-      desc: 'Raise your LEFT hand on the left side of the camera and move it smoothly to spin and view all sides of the 3D cube.',
+      title: 'Open to Revolve Cube • Punch (Fist ✊) to Stop!',
+      desc: 'Move your OPEN left hand to smoothly revolve the 3D cube. Make a PUNCH / FIST (✊) anytime to stop revolving and reposition your hand comfortably, then OPEN your hand (✋) again to keep revolving!',
     },
     {
       icon: '👆',
@@ -192,20 +192,55 @@ function HowToPlayModal({ onClose }) {
 }
 
 // ============================================================
-// ZONE MAPPING FOR RIGHT HAND (SELECTING CUBE SIDE)
+// DETECT PUNCH / CLOSED FIST (✊) VS OPEN HAND (✋)
 // ============================================================
-// rx is normalized within Right-Hand zone (0..1), ry is normalized height (0..1)
+function isHandClosedFist(pts) {
+  if (!pts || pts.length < 21) return false;
+  const wrist = pts[0];
+  const midMcp = pts[9];
+  const palmLen = Math.max(0.07, Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y));
+
+  // Check Index (8,6,5), Middle (12,10,9), Ring (16,14,13), Pinky (20,18,17)
+  const fingers = [
+    [8, 6, 5],
+    [12, 10, 9],
+    [16, 14, 13],
+    [20, 18, 17],
+  ];
+
+  let curledCount = 0;
+  for (const [tipIdx, pipIdx, mcpIdx] of fingers) {
+    const tip = pts[tipIdx];
+    const pip = pts[pipIdx];
+    const mcp = pts[mcpIdx];
+    if (!tip || !pip || !mcp) continue;
+
+    const tipToWrist = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+    const pipToWrist = Math.hypot(pip.x - wrist.x, pip.y - wrist.y);
+    const tipToMcp   = Math.hypot(tip.x - mcp.x, tip.y - mcp.y);
+
+    if (tipToWrist < pipToWrist * 1.12 || tipToMcp < palmLen * 0.78) {
+      curledCount += 1;
+    }
+  }
+  return curledCount >= 3;
+}
+
+// ============================================================
+// ZONE MAPPING FOR RIGHT HAND (COMFORTABLE INSET PAD — NO EDGE REACHING)
+// ============================================================
+// rx, ry are normalized (0..1) inside the inset Right-Hand pad
 function getZoneFromRightHand(rx, ry) {
-  if (ry < 0.28) {
+  if (ry < 0.34) {
     return { key: 'U', label: 'Top Side (U)', short: 'TOP (U)', orient: 'horizontal' };
   }
-  if (ry > 0.72) {
+  if (ry > 0.66) {
     return { key: 'D', label: 'Bottom Side (D)', short: 'BOTTOM (D)', orient: 'horizontal' };
   }
-  if (rx < 0.34) {
+  if (rx < 0.36) {
     return { key: 'L', label: 'Left Side (L)', short: 'LEFT (L)', orient: 'vertical' };
   }
-  if (rx > 0.66) {
+  if (rx > 0.64) {
     return { key: 'R', label: 'Right Side (R)', short: 'RIGHT (R)', orient: 'vertical' };
   }
   return { key: 'F', label: 'Front Side (F)', short: 'FRONT (F)', orient: 'face' };
@@ -263,7 +298,7 @@ const GestureRubiksCube = () => {
   // Spatial hand persistence
   const handMemoryRef = useRef({
     left:  { x: 0.25, y: 0.5, lastSeen: 0 },
-    right: { x: 0.75, y: 0.5, lastSeen: 0 },
+    right: { x: 0.72, y: 0.5, lastSeen: 0 },
   });
 
   // Callback Refs
@@ -284,6 +319,7 @@ const GestureRubiksCube = () => {
   const [swapHands, setSwapHands]         = useState(false);
   const [activeZone, setActiveZone]       = useState(null);
   const [isPinchedUI, setIsPinchedUI]     = useState(false);
+  const [isLeftFistUI, setIsLeftFistUI]   = useState(false);
   const [swipeToast, setSwipeToast]       = useState(null);
   const [hintMove, setHintMove]           = useState(null);
   const [elapsedTime, setElapsedTime]     = useState(0);
@@ -328,11 +364,11 @@ const GestureRubiksCube = () => {
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    scene.add(new THREE.AmbientLight(0xffffff, 1.05));
-    const dl1 = new THREE.DirectionalLight(0xffffff, 0.85);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.78));
+    const dl1 = new THREE.DirectionalLight(0xffffff, 0.65);
     dl1.position.set(6, 10, 10);
     scene.add(dl1);
-    const dl2 = new THREE.DirectionalLight(0x93c5fd, 0.35);
+    const dl2 = new THREE.DirectionalLight(0x93c5fd, 0.28);
     dl2.position.set(-6, -8, -6);
     scene.add(dl2);
 
@@ -349,12 +385,12 @@ const GestureRubiksCube = () => {
         for (let z = -1; z <= 1; z++) {
           if (x === 0 && y === 0 && z === 0) continue;
           const mats = [
-            new THREE.MeshLambertMaterial({ color: x ===  1 ? CUBE_COLORS.RIGHT  : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
-            new THREE.MeshLambertMaterial({ color: x === -1 ? CUBE_COLORS.LEFT   : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
-            new THREE.MeshLambertMaterial({ color: y ===  1 ? CUBE_COLORS.UP     : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
-            new THREE.MeshLambertMaterial({ color: y === -1 ? CUBE_COLORS.DOWN   : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
-            new THREE.MeshLambertMaterial({ color: z ===  1 ? CUBE_COLORS.FRONT  : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
-            new THREE.MeshLambertMaterial({ color: z === -1 ? CUBE_COLORS.BACK   : CUBE_COLORS.INSIDE, emissive: 0x000000 }),
+            new THREE.MeshLambertMaterial({ color: x ===  1 ? CUBE_COLORS.RIGHT  : CUBE_COLORS.INSIDE, emissive: 0x000000, emissiveIntensity: 0 }),
+            new THREE.MeshLambertMaterial({ color: x === -1 ? CUBE_COLORS.LEFT   : CUBE_COLORS.INSIDE, emissive: 0x000000, emissiveIntensity: 0 }),
+            new THREE.MeshLambertMaterial({ color: y ===  1 ? CUBE_COLORS.UP     : CUBE_COLORS.INSIDE, emissive: 0x000000, emissiveIntensity: 0 }),
+            new THREE.MeshLambertMaterial({ color: y === -1 ? CUBE_COLORS.DOWN   : CUBE_COLORS.INSIDE, emissive: 0x000000, emissiveIntensity: 0 }),
+            new THREE.MeshLambertMaterial({ color: z ===  1 ? CUBE_COLORS.FRONT  : CUBE_COLORS.INSIDE, emissive: 0x000000, emissiveIntensity: 0 }),
+            new THREE.MeshLambertMaterial({ color: z === -1 ? CUBE_COLORS.BACK   : CUBE_COLORS.INSIDE, emissive: 0x000000, emissiveIntensity: 0 }),
           ];
           const mesh = new THREE.Mesh(geo, mats);
           mesh.position.set(x, y, z);
@@ -435,7 +471,7 @@ const GestureRubiksCube = () => {
   }, []);
 
   // ============================================================
-  // 3. HIGHLIGHT SELECTED OR LOCKED LAYER ON 3D CUBE
+  // 3. HIGHLIGHT SELECTED OR LOCKED LAYER ON 3D CUBE (SUBTLE & DULL SO COLORS STAY CLEAR)
   // ============================================================
   const highlightLayer = useCallback((zoneKey, isLocked = false) => {
     const cacheKey = `${zoneKey || 'none'}_${isLocked ? 'L' : 'H'}`;
@@ -446,7 +482,7 @@ const GestureRubiksCube = () => {
     if (!cubies) return;
 
     const resolved = zoneKey ? resolveViewAlignedLayer(zoneKey) : null;
-    const glowHex = isLocked ? 0xf59e0b : 0x38bdf8;
+    const glowHex = isLocked ? 0xd97706 : 0x0284c7;
 
     cubies.forEach((m) => {
       let match = false;
@@ -455,8 +491,15 @@ const GestureRubiksCube = () => {
         match = Math.abs(v - resolved.layerIndex) < 0.3;
       }
       m.material.forEach((mat) => {
-        if (mat.color.getHex() !== CUBE_COLORS.INSIDE) {
+        const isCore = mat.color.getHex() === CUBE_COLORS.INSIDE;
+        if (isCore) {
+          // Highlight the dark border frame between cubies so sticker colors are never washed out
           mat.emissive.setHex(match ? glowHex : 0x000000);
+          mat.emissiveIntensity = match ? (isLocked ? 0.45 : 0.32) : 0;
+        } else {
+          // Very dull, subtle 0.08–0.12 tint on sticker faces so Red/Yellow/White/Orange/Green/Blue stay 100% clear
+          mat.emissive.setHex(match ? glowHex : 0x000000);
+          mat.emissiveIntensity = match ? (isLocked ? 0.12 : 0.08) : 0;
         }
       });
     });
@@ -868,7 +911,7 @@ const GestureRubiksCube = () => {
     const canvas = hudCanvasRef.current;
     if (!canvas) return;
 
-    const W = 480;
+    const W = 640;
     const H = 360;
     if (canvas.width !== W) canvas.width = W;
     if (canvas.height !== H) canvas.height = H;
@@ -889,7 +932,7 @@ const GestureRubiksCube = () => {
       const count = hands ? hands.length : 0;
       setHandCount((prev) => (prev !== count ? count : prev));
 
-      const vw = video.videoWidth || 480;
+      const vw = video.videoWidth || 640;
       const vh = video.videoHeight || 360;
 
       // Normalize all 21 keypoints uniformly per hand (0..1 in mirrored screen space)
@@ -924,7 +967,7 @@ const GestureRubiksCube = () => {
           rightHand = single;
           handMemoryRef.current.right = { x: single.palmX, y: single.palmY, lastSeen: now };
         } else {
-          const onRightSide = isSwapped ? single.palmX < 0.55 : single.palmX >= 0.42;
+          const onRightSide = isSwapped ? single.palmX < 0.54 : single.palmX >= 0.45;
           if (onRightSide) {
             rightHand = single;
             handMemoryRef.current.right = { x: single.palmX, y: single.palmY, lastSeen: now };
@@ -935,30 +978,38 @@ const GestureRubiksCube = () => {
         }
       }
 
-      // Draw Zone Grid Overlay on Camera Box (with full "BOTTOM (D)" label)
+      // Draw Inset Zone Grid Overlay on Camera Box (Leaves generous margin on left/right/top/bottom so hands never go out of bounds!)
       const activeZoneObj = lockedZoneRef.current || hoveredZoneRef.current;
       const activeKey = activeZoneObj?.key || null;
-      const isLockedNow = isPinchedRef.current;
+      const isLockedNow = isPinchedRef.current && !swipeDoneInPinchRef.current;
 
-      const x0 = isSwapped ? 0 : W * 0.40;
-      const zw = W * 0.60;
+      const padXNorm = isSwapped ? 0.08 : 0.46;
+      const padWNelem = 0.46; // Leaves 8% outer margin on the edge so hand never goes out of camera bound!
+      const padYNorm = 0.06;
+      const padHNorm = 0.80;
 
+      const x0 = W * padXNorm;
+      const zw = W * padWNelem;
+      const y0 = H * padYNorm;
+      const zh = H * padHNorm;
+
+      // Center divider between Left Hand area and Right Hand area
       ctx.save();
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
       ctx.setLineDash([5, 5]);
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(isSwapped ? W * 0.60 : W * 0.40, 0);
-      ctx.lineTo(isSwapped ? W * 0.60 : W * 0.40, H);
+      ctx.moveTo(isSwapped ? W * 0.55 : W * 0.45, 0);
+      ctx.lineTo(isSwapped ? W * 0.55 : W * 0.45, H);
       ctx.stroke();
       ctx.restore();
 
       const zones = [
-        { key: 'U', label: 'TOP (U)',    x: x0,            y: 0,        w: zw,        h: H * 0.28 },
-        { key: 'L', label: 'LEFT (L)',   x: x0,            y: H * 0.28, w: zw * 0.34, h: H * 0.44 },
-        { key: 'F', label: 'FRONT (F)',  x: x0 + zw * 0.34, y: H * 0.28, w: zw * 0.32, h: H * 0.44 },
-        { key: 'R', label: 'RIGHT (R)',  x: x0 + zw * 0.66, y: H * 0.28, w: zw * 0.34, h: H * 0.44 },
-        { key: 'D', label: 'BOTTOM (D)', x: x0,            y: H * 0.72, w: zw,        h: H * 0.28 },
+        { key: 'U', label: 'TOP (U)',    x: x0,            y: y0,             w: zw,        h: zh * 0.34 },
+        { key: 'L', label: 'LEFT (L)',   x: x0,            y: y0 + zh * 0.34, w: zw * 0.36, h: zh * 0.32 },
+        { key: 'F', label: 'FRONT (F)',  x: x0 + zw * 0.36, y: y0 + zh * 0.34, w: zw * 0.28, h: zh * 0.32 },
+        { key: 'R', label: 'RIGHT (R)',  x: x0 + zw * 0.64, y: y0 + zh * 0.34, w: zw * 0.36, h: zh * 0.32 },
+        { key: 'D', label: 'BOTTOM (D)', x: x0,            y: y0 + zh * 0.66, w: zw,        h: zh * 0.34 },
       ];
 
       zones.forEach((z) => {
@@ -968,14 +1019,14 @@ const GestureRubiksCube = () => {
           ctx.strokeStyle = isLockedNow ? '#f59e0b' : '#38bdf8';
           ctx.lineWidth = 3;
         } else {
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.20)';
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
           ctx.lineWidth = 1;
         }
         ctx.fillRect(z.x, z.y, z.w, z.h);
         ctx.strokeRect(z.x, z.y, z.w, z.h);
 
-        ctx.fillStyle = isSel ? (isLockedNow ? '#fef08a' : '#e0f2fe') : 'rgba(255,255,255,0.65)';
+        ctx.fillStyle = isSel ? (isLockedNow ? '#fef08a' : '#e0f2fe') : 'rgba(255,255,255,0.72)';
         ctx.font = 'bold 12px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(
@@ -1014,28 +1065,44 @@ const GestureRubiksCube = () => {
         ctx.fill();
       };
 
-      // ── 1. LEFT HAND: INSTANT CUBE ORBIT ──────────────────────
+      // ── 1. LEFT HAND: OPEN TO REVOLVE CUBE • PUNCH (FIST ✊) TO STOP REVOLVING ──
       if (leftHand) {
         const kps = leftHand.pts;
-        drawInstantSkeleton(kps, '#06b6d4');
+        const isFist = isHandClosedFist(kps);
+        setIsLeftFistUI((prev) => (prev !== isFist ? isFist : prev));
 
-        const sm = leftSmoothRef.current.filter(leftHand.palmX, leftHand.palmY);
-        if (prevLeftPosRef.current) {
-          const dx = (sm.x - prevLeftPosRef.current.x) * W;
-          const dy = (sm.y - prevLeftPosRef.current.y) * H;
-          if (Math.abs(dx) > 1.0) targetRotRef.current.y += dx * 0.014;
-          if (Math.abs(dy) > 1.0) {
-            targetRotRef.current.x = Math.max(-0.8, Math.min(0.8, targetRotRef.current.x + dy * 0.012));
+        if (isFist) {
+          // Punch / Fist (✊): Stop revolving immediately so user can reposition hand inside camera bounds!
+          drawInstantSkeleton(kps, '#a855f7');
+          leftSmoothRef.current.reset();
+          prevLeftPosRef.current = null;
+
+          ctx.fillStyle = '#d8b4fe';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.fillText('✊ PUNCH: STOPPED', Math.max(8, kps[0].x * W - 45), Math.max(18, kps[0].y * H - 12));
+        } else {
+          // Open Hand (✋): Smoothly revolve the 3D cube!
+          drawInstantSkeleton(kps, '#06b6d4');
+
+          const sm = leftSmoothRef.current.filter(leftHand.palmX, leftHand.palmY);
+          if (prevLeftPosRef.current) {
+            const dx = (sm.x - prevLeftPosRef.current.x) * W;
+            const dy = (sm.y - prevLeftPosRef.current.y) * H;
+            if (Math.abs(dx) > 0.8) targetRotRef.current.y += dx * 0.017;
+            if (Math.abs(dy) > 0.8) {
+              targetRotRef.current.x = Math.max(-0.8, Math.min(0.8, targetRotRef.current.x + dy * 0.014));
+            }
           }
-        }
-        prevLeftPosRef.current = { x: sm.x, y: sm.y };
+          prevLeftPosRef.current = { x: sm.x, y: sm.y };
 
-        ctx.fillStyle = '#22d3ee';
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText('✋ LEFT: ORBIT', Math.max(8, kps[0].x * W - 35), Math.max(18, kps[0].y * H - 12));
+          ctx.fillStyle = '#22d3ee';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.fillText('✋ OPEN: REVOLVING', Math.max(8, kps[0].x * W - 45), Math.max(18, kps[0].y * H - 12));
+        }
       } else if (now - handMemoryRef.current.left.lastSeen > 250) {
         leftSmoothRef.current.reset();
         prevLeftPosRef.current = null;
+        setIsLeftFistUI((prev) => (prev !== false ? false : prev));
       }
 
       // ── 2. RIGHT HAND: OPEN TO SELECT -> PINCH TO LOCK -> SLIDE TO ROTATE ──
@@ -1043,47 +1110,47 @@ const GestureRubiksCube = () => {
         const kps = rightHand.pts;
         const thumbTip = kps[4];
         const indexTip = kps[8];
-        const indexDip = kps[7];
         const wrist    = kps[0];
         const midMcp   = kps[9];
-        const indexMcp = kps[5];
-        const pinkyMcp = kps[17];
 
         // Control point is midpoint between thumb tip and index tip
         const ctrlX = (thumbTip.x + indexTip.x) * 0.5;
         const ctrlY = (thumbTip.y + indexTip.y) * 0.5;
         const sm = rightSmoothRef.current.filter(ctrlX, ctrlY);
 
-        // Robust Multi-Metric Pinch Detection (Works in Top, Bottom, Left, Right, and Center!)
-        // Checks both thumb-to-index-tip and thumb-to-index-DIP, plus max of palm length & palm width
+        // Clean Thumb-Tip to Index-Tip distance for crisp pinch & instant unpinch
         const distTip = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
-        const distDip = indexDip ? Math.hypot(thumbTip.x - indexDip.x, thumbTip.y - indexDip.y) : distTip;
-        const rawPinchDist = Math.min(distTip, distDip * 1.05);
-
-        const palmLen = Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y);
-        const palmWid = (indexMcp && pinkyMcp) ? Math.hypot(indexMcp.x - pinkyMcp.x, indexMcp.y - pinkyMcp.y) : 0.12;
-        const palmScale = Math.max(0.10, palmLen, palmWid * 1.25);
-        const pinchRatio = rawPinchDist / palmScale;
+        const palmLen = Math.max(0.09, Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y));
+        const pinchRatio = distTip / palmLen;
 
         const wasPinched = isPinchedRef.current;
-        // Generous thresholds so pinching at top/bottom/left/right camera edges always registers!
-        let detectedPinch = wasPinched
-          ? (rawPinchDist < 0.125 || pinchRatio < 0.78)
-          : (rawPinchDist < 0.092 || pinchRatio < 0.58);
+        const alreadySwiped = swipeDoneInPinchRef.current;
 
-        // 4-frame unpinch debounce so sliding the hand while pinched never drops the pinch mid-slide!
-        if (!detectedPinch && wasPinched) {
+        // Crisp engage & release thresholds so unpinching is instant and never gets stuck
+        let detectedPinch;
+        if (!wasPinched) {
+          detectedPinch = distTip < 0.068 && pinchRatio < 0.48;
+        } else if (alreadySwiped) {
+          // Wait for user to open fingers slightly before allowing the next pinch
+          detectedPinch = distTip < 0.068 && pinchRatio < 0.48;
+        } else {
+          // While actively sliding before turn triggers
+          detectedPinch = distTip < 0.080 && pinchRatio < 0.54;
+        }
+
+        // Only 1-frame debounce while actively sliding; 0 debounce after swipe
+        if (!detectedPinch && wasPinched && !alreadySwiped) {
           unpinchDebounceRef.current += 1;
-          if (unpinchDebounceRef.current < 4) {
+          if (unpinchDebounceRef.current < 2) {
             detectedPinch = true;
           }
-        } else if (detectedPinch) {
+        } else {
           unpinchDebounceRef.current = 0;
         }
 
-        const regionStart = isSwapped ? 0 : 0.40;
-        const regionWidth = 0.60;
-        const relX = Math.max(0, Math.min(1, (sm.x - regionStart) / regionWidth));
+        // Map into the comfortable inset Right-Hand pad (so user never has to reach camera edges!)
+        const relX = Math.max(0, Math.min(1, (sm.x - padXNorm) / padWNelem));
+        const relY = Math.max(0, Math.min(1, (sm.y - padYNorm) / padHNorm));
 
         if (!detectedPinch) {
           // ── OPEN HAND: SELECTING SIDE ONLY ──
@@ -1095,7 +1162,7 @@ const GestureRubiksCube = () => {
             setIsPinchedUI(false);
           }
 
-          const zone = getZoneFromRightHand(relX, sm.y);
+          const zone = getZoneFromRightHand(relX, relY);
           hoveredZoneRef.current = zone;
           setActiveZone((prev) => (prev !== zone.label ? zone.label : prev));
           if (highlightLayerRef.current) highlightLayerRef.current(zone.key, false);
@@ -1110,7 +1177,7 @@ const GestureRubiksCube = () => {
           // ── PINCHED HAND: LOCKED SIDE + SLIDE TO ROTATE ──
           if (!wasPinched) {
             isPinchedRef.current = true;
-            const locked = hoveredZoneRef.current || getZoneFromRightHand(relX, sm.y);
+            const locked = hoveredZoneRef.current || getZoneFromRightHand(relX, relY);
             lockedZoneRef.current = locked;
             pinchAnchorRef.current = { x: sm.x, y: sm.y };
             swipeDoneInPinchRef.current = false;
@@ -1120,57 +1187,70 @@ const GestureRubiksCube = () => {
           }
 
           const locked = lockedZoneRef.current;
-          if (locked && highlightLayerRef.current) {
-            highlightLayerRef.current(locked.key, true);
-          }
 
-          drawInstantSkeleton(kps, '#f59e0b');
+          if (swipeDoneInPinchRef.current) {
+            // Swipe rotation already completed for this pinch: show normal green hand & no swipe line!
+            const zone = getZoneFromRightHand(relX, relY);
+            hoveredZoneRef.current = zone;
+            setActiveZone((prev) => (prev !== zone.label ? zone.label : prev));
+            if (highlightLayerRef.current) highlightLayerRef.current(zone.key, false);
+            drawInstantSkeleton(kps, '#10b981');
+          } else {
+            if (locked && highlightLayerRef.current) {
+              highlightLayerRef.current(locked.key, true);
+            }
 
-          if (pinchAnchorRef.current && locked) {
-            const ax = pinchAnchorRef.current.x * W;
-            const ay = pinchAnchorRef.current.y * H;
-            const cx = sm.x * W;
-            const cy = sm.y * H;
+            drawInstantSkeleton(kps, '#f59e0b');
 
-            // Gold Lock Anchor
-            ctx.beginPath();
-            ctx.arc(ax, ay, 9, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(245, 158, 11, 0.55)';
-            ctx.fill();
+            if (pinchAnchorRef.current && locked) {
+              const ax = pinchAnchorRef.current.x * W;
+              const ay = pinchAnchorRef.current.y * H;
+              const cx = sm.x * W;
+              const cy = sm.y * H;
 
-            // Live Slide Line
-            ctx.beginPath();
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(cx, cy);
-            ctx.strokeStyle = '#fde047';
-            ctx.lineWidth = 4;
-            ctx.stroke();
+              // Gold Lock Anchor
+              ctx.beginPath();
+              ctx.arc(ax, ay, 8, 0, Math.PI * 2);
+              ctx.fillStyle = 'rgba(245, 158, 11, 0.55)';
+              ctx.fill();
 
-            // Pinched Finger Ring
-            ctx.beginPath();
-            ctx.arc(cx, cy, 16, 0, Math.PI * 2);
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 3.5;
-            ctx.stroke();
+              // Live Slide Line
+              ctx.beginPath();
+              ctx.moveTo(ax, ay);
+              ctx.lineTo(cx, cy);
+              ctx.strokeStyle = '#fde047';
+              ctx.lineWidth = 3.5;
+              ctx.stroke();
 
-            // Trigger rotation as soon as hand slides 20px (out of 480px width = ~4% of camera box!)
-            if (!swipeDoneInPinchRef.current && !isAnimRef.current && Date.now() - lastMoveTimeRef.current > 350) {
-              const dx = cx - ax;
-              const dy = cy - ay;
-              const SLIDE_PX = 20;
+              // Pinched Finger Ring
+              ctx.beginPath();
+              ctx.arc(cx, cy, 15, 0, Math.PI * 2);
+              ctx.strokeStyle = '#f59e0b';
+              ctx.lineWidth = 3;
+              ctx.stroke();
 
-              if (Math.hypot(dx, dy) >= SLIDE_PX) {
-                swipeDoneInPinchRef.current = true;
-                lastMoveTimeRef.current = Date.now();
-                pinchAnchorRef.current = { x: sm.x, y: sm.y };
+              // Trigger rotation as soon as hand slides 20px
+              if (!isAnimRef.current && Date.now() - lastMoveTimeRef.current > 350) {
+                const dx = cx - ax;
+                const dy = cy - ay;
+                const SLIDE_PX = 20;
 
-                const isHoriz = Math.abs(dx) >= Math.abs(dy);
-                const dirArrow = isHoriz ? (dx > 0 ? '→' : '←') : (dy > 0 ? '↓' : '↑');
-                setSwipeToast(`${locked.short} ${dirArrow}`);
-                setTimeout(() => setSwipeToast(null), 750);
+                if (Math.hypot(dx, dy) >= SLIDE_PX) {
+                  swipeDoneInPinchRef.current = true;
+                  lastMoveTimeRef.current = Date.now();
+                  // Immediately clear the swipe line & unlock UI so it never stays stuck!
+                  pinchAnchorRef.current = null;
+                  lockedZoneRef.current = null;
+                  setIsPinchedUI(false);
 
-                if (executeVisualMoveRef.current) {
-                  executeVisualMoveRef.current(locked.key, dx, dy);
+                  const isHoriz = Math.abs(dx) >= Math.abs(dy);
+                  const dirArrow = isHoriz ? (dx > 0 ? '→' : '←') : (dy > 0 ? '↓' : '↑');
+                  setSwipeToast(`${locked.short} ${dirArrow}`);
+                  setTimeout(() => setSwipeToast(null), 750);
+
+                  if (executeVisualMoveRef.current) {
+                    executeVisualMoveRef.current(locked.key, dx, dy);
+                  }
                 }
               }
             }
@@ -1264,7 +1344,7 @@ const GestureRubiksCube = () => {
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              ✋ Left Hand: Orbit Cube &nbsp;•&nbsp; 👆 Right Hand Open: Select Side &nbsp;•&nbsp; 🤏 Pinch &amp; Slide: Rotate Side
+              ✋ Left Open: Revolve Cube (✊ Punch to Stop) &nbsp;•&nbsp; 👆 Right Open: Select Side &nbsp;•&nbsp; 🤏 Pinch &amp; Slide: Rotate Side
             </p>
           </div>
         </div>
@@ -1318,6 +1398,11 @@ const GestureRubiksCube = () => {
             >
               <Lightbulb className="w-3.5 h-3.5 text-amber-400" /> Hint
             </button>
+            {isLeftFistUI && (
+              <div className="px-3 py-1.5 rounded-xl bg-purple-500/25 border border-purple-400/50 text-xs font-bold text-purple-200 flex items-center gap-1.5">
+                <span>✊ Left Punch: Orbit Paused (Open hand to revolve)</span>
+              </div>
+            )}
           </div>
 
           {/* Live Selection & Pinch-Lock Status Banner */}
@@ -1388,13 +1473,13 @@ const GestureRubiksCube = () => {
           )}
         </div>
 
-        {/* Larger Right Sidebar: Larger Camera Box & Full "Bottom" Labels */}
-        <aside className="w-full lg:w-[29rem] bg-slate-800/90 border-t lg:border-t-0 lg:border-l border-slate-700/60 p-4 flex flex-col gap-3.5 z-20">
-          {/* Larger Camera Feed + Interactive Zone Overlay */}
+        {/* Wider Right Sidebar with Full 16:9 Widescreen Camera Box */}
+        <aside className="w-full lg:w-[33rem] bg-slate-800/90 border-t lg:border-t-0 lg:border-l border-slate-700/60 p-4 flex flex-col gap-3.5 z-20">
+          {/* Widescreen 16:9 Camera Feed + Inset Zone Overlay */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                <Camera className="w-4 h-4 text-indigo-400" /> Real-Time Hand Tracking
+                <Camera className="w-4 h-4 text-indigo-400" /> Widescreen Hand Tracking
               </span>
               <div className="flex items-center gap-2">
                 <span
@@ -1421,29 +1506,29 @@ const GestureRubiksCube = () => {
             {showCam && (
               <div
                 className="relative w-full rounded-2xl overflow-hidden bg-slate-950 border-2 border-slate-700/90 shadow-xl"
-                style={{ aspectRatio: '4/3', minHeight: '260px' }}
+                style={{ aspectRatio: '16/9', minHeight: '275px' }}
               >
                 <Webcam
                   ref={webcamRef}
                   audio={false}
                   mirrored={true}
-                  width={480}
+                  width={640}
                   height={360}
-                  videoConstraints={{ facingMode: 'user', width: 480, height: 360 }}
-                  className="absolute inset-0 w-full h-full object-cover opacity-85"
+                  videoConstraints={{ facingMode: 'user', width: 640, height: 360 }}
+                  className="absolute inset-0 w-full h-full object-fill opacity-85"
                 />
                 <canvas
                   ref={hudCanvasRef}
-                  width={480}
+                  width={640}
                   height={360}
                   className="absolute inset-0 w-full h-full pointer-events-none z-10"
                 />
                 <div className="absolute bottom-2 left-2.5 right-2.5 z-20 bg-slate-900/90 rounded-xl px-3 py-1.5 text-[11px] flex justify-between border border-slate-700/60">
                   <span className="text-cyan-300 font-bold">
-                    {swapHands ? '👈 Left Side: Pinch & Turn' : '👈 Left Side: Orbit Cube'}
+                    {swapHands ? '👈 Left: Pinch & Turn' : '✋ Left Open: Orbit (✊ Punch: Stop)'}
                   </span>
                   <span className="text-amber-300 font-bold">
-                    {swapHands ? 'Right Side: Orbit Cube 👉' : 'Right Side: Pinch & Turn 👉'}
+                    {swapHands ? '✋ Right Open: Orbit (✊ Stop)' : 'Right: Select & Pinch-Slide 👉'}
                   </span>
                 </div>
               </div>
@@ -1454,7 +1539,7 @@ const GestureRubiksCube = () => {
           <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-700/60 text-xs space-y-1.5">
             <div className="flex items-center gap-2 text-cyan-300 font-semibold">
               <span>1.</span>
-              <span><strong>Left Hand:</strong> Move smoothly to revolve the whole cube.</span>
+              <span><strong>Left Hand:</strong> Open hand (✋) to revolve cube, make a <strong>Punch/Fist (✊)</strong> to stop!</span>
             </div>
             <div className="flex items-center gap-2 text-sky-300 font-semibold">
               <span>2.</span>
