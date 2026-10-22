@@ -1,25 +1,22 @@
 // ============================================================================
-// AIGameService
+// AIGameService (Next-Gen Real-Time Adaptive Cognitive Game Engine)
 // ----------------------------------------------------------------------------
-// Procedurally-generated, difficulty-adaptive content for the mini games.
-// Every call returns a fresh, randomized puzzle so patients never see the
-// same content twice in a row. Difficulty (length / complexity / option
-// count) scales smoothly and *infinitely* with `level` - there is no cap,
-// the games only end when the patient runs out of lives.
-//
-// "Adaptive" here means: each generator looks at `level` to decide how hard
-// the puzzle should be, and uses weighted random selection that avoids
-// repeating the same content twice in a row (a lightweight stand-in for a
-// real ML recommender, easy to swap for an actual model/API later without
-// changing the game components, since they only depend on this file's
-// public shape).
+// Procedurally-generated, difficulty-adaptive, infinite real-time content for:
+//  1. Memory Lane
+//  2. Routine Builder
+//  3. Pattern Quest
+//  4. Story Weaver (Dynamic real-time narrative engine with scaling questions)
+//  5. Face & Place (Independent 2D randomized matching with 40+ professions)
+//  6. Card Flip (Memory match with adaptive time bonuses & card layout)
+//  7. Mindful Moments (Interactive biofeedback breathing & calming reflection)
 // ============================================================================
 
-// --------------------------- small utilities --------------------------------
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
+// Small utilities
 const rand = (n) => Math.floor(Math.random() * n);
 
-const shuffle = (arr) => {
+export const shuffle = (arr) => {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = rand(i + 1);
@@ -28,11 +25,11 @@ const shuffle = (arr) => {
   return a;
 };
 
-const sample = (arr, count) => shuffle(arr).slice(0, count);
+export const sample = (arr, count) => shuffle(arr).slice(0, count);
 
-const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
+export const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
 
-// Avoids picking the same index twice in a row for a given pool key.
+// Avoid picking the exact same element consecutively
 const lastPicks = {};
 function pickIndexAvoidingRepeat(key, length) {
   if (length <= 1) return 0;
@@ -47,416 +44,486 @@ function pickIndexAvoidingRepeat(key, length) {
 }
 
 // =============================================================================
-// 1. MEMORY LANE
+// 1. MEMORY LANE - Procedural Sequence Engine
 // =============================================================================
 
-const MEMORY_EMOJI_POOL = [
-  '🐘', '🦏', '🦁', '🐯', '🐒', '🦋', '🐝', '🐞',
-  '🌸', '🌺', '🌻', '🌾', '🌳', '🌈', '☀️', '🌙',
-  '⭐', '🍎', '🍌', '🍇', '🥭', '🥥', '🪕', '🥁',
-];
+const THEMED_MEMORY_POOLS = {
+  animals: ['🐘', '🦏', '🦁', '🐯', '🐒', '🦋', '🐝', '🐞', '🐬', '🦚', '🐼', '🦊'],
+  nature:   ['🌸', '🌺', '🌻', '🌾', '🌳', '🌈', '☀️', '🌙', '⭐', '🍀', '🍁', '🍄'],
+  fruits:   ['🍎', '🍌', '🍇', '🥭', '🥥', '🍓', '🍊', '🍉', '🍍', '🍒', '🥑', '🥝'],
+  music:    ['🪕', '🥁', '🎸', '🎺', '🎻', '🎹', '🪘', '🎷', '🔔', '🎵', '🎶', '📻'],
+  cozy:     ['☕', '🫖', '🕯️', '📖', '🏡', '🪴', '🧶', '🛋️', '🎨', '🪡', '🎈', '🎁'],
+};
 
 function generateMemorySequence(level) {
-  // grows from 3 items up to 15+, and starts allowing repeated items
-  // (harder to track) once the pool would otherwise run out.
-  const length = clamp(3 + Math.floor((level - 1) / 1.5), 3, 24);
-  const allowRepeats = length > MEMORY_EMOJI_POOL.length;
-  if (allowRepeats) {
-    return Array.from({ length }, () => MEMORY_EMOJI_POOL[rand(MEMORY_EMOJI_POOL.length)]);
+  const poolKeys = Object.keys(THEMED_MEMORY_POOLS);
+  const selectedTheme = poolKeys[rand(poolKeys.length)];
+  const pool = THEMED_MEMORY_POOLS[selectedTheme];
+
+  // Sequence length scales smoothly with level: Level 1=3, Level 2=4, Level 3=5, up to 10
+  const length = clamp(3 + Math.floor((level - 1) / 1.5), 3, 10);
+  
+  // Pick sequence from current theme
+  const sequence = sample(pool, Math.min(length, pool.length));
+  while (sequence.length < length) {
+    sequence.push(pool[rand(pool.length)]);
   }
-  return sample(MEMORY_EMOJI_POOL, length);
-}
 
-// =============================================================================
-// 2. ROUTINE BUILDER
-// =============================================================================
-// Each theme is already in the *correct* order. `hint` explains WHY that
-// step happens where it does, so the tutorial / "Learn it first" screen can
-// actually teach the logic instead of just testing recall.
+  // Generate 12 available interactive tiles (sequence + random distractors from all pools)
+  const allPool = Object.values(THEMED_MEMORY_POOLS).flat();
+  const distractors = sample(allPool.filter(e => !sequence.includes(e)), Math.max(0, 12 - new Set(sequence).size));
+  const availableTiles = shuffle([...new Set(sequence), ...distractors]).slice(0, 12);
 
-const ROUTINE_THEMES = [
-  {
-    name: 'Morning Routine',
-    steps: [
-      { text: '⏰ Wake up and stretch', hint: 'Start the day by waking your body up gently.' },
-      { text: '🪥 Brush your teeth', hint: 'Clean teeth first thing, before eating.' },
-      { text: '🚿 Take a shower', hint: 'Wash up after brushing, before getting dressed.' },
-      { text: '👕 Get dressed', hint: 'Put on clean clothes once you are washed.' },
-      { text: '🍳 Eat breakfast', hint: 'Eat after you are dressed and ready.' },
-      { text: '☕ Have a warm drink', hint: 'A warm drink usually comes with or after breakfast.' },
-      { text: '🚪 Leave the house', hint: 'Head out only once everything else is done.' },
-    ],
-  },
-  {
-    name: 'Making Tea',
-    steps: [
-      { text: '🚰 Fill the kettle with water', hint: 'You need water in the kettle before it can boil.' },
-      { text: '🔥 Boil the water', hint: 'Turn the kettle on after filling it.' },
-      { text: '🫖 Put a tea bag in the cup', hint: 'The tea bag goes in before the hot water.' },
-      { text: '💧 Pour hot water into the cup', hint: 'Pour once the water has boiled.' },
-      { text: '⏳ Let it steep for a few minutes', hint: 'Give the tea time to brew before drinking.' },
-      { text: '🥛 Add milk or sugar if you like', hint: 'Add extras after the tea has steeped.' },
-      { text: '☕ Enjoy your tea', hint: 'The last step is always to sit back and enjoy it.' },
-    ],
-  },
-  {
-    name: 'Gardening',
-    steps: [
-      { text: '🧤 Put on gardening gloves', hint: 'Protect your hands before touching soil or tools.' },
-      { text: '🌱 Dig a small hole', hint: 'Make space in the soil before planting anything.' },
-      { text: '🌰 Place the seed in the hole', hint: 'The seed goes in after the hole is ready.' },
-      { text: '🪴 Cover the seed with soil', hint: 'Cover it gently once it is placed.' },
-      { text: '💧 Water the soil', hint: 'Give it water after covering, so the seed can grow.' },
-      { text: '☀️ Leave it in the sunlight', hint: 'Sunlight comes after watering.' },
-      { text: '🌷 Watch it grow', hint: 'Growing happens last, over time.' },
-    ],
-  },
-  {
-    name: 'Getting Ready for Bed',
-    steps: [
-      { text: '📺 Turn off the television', hint: 'Wind down by turning off screens first.' },
-      { text: '🪥 Brush your teeth', hint: 'Brush before changing into pyjamas.' },
-      { text: '👘 Put on pyjamas', hint: 'Change into sleepwear after brushing your teeth.' },
-      { text: '📖 Read a little or relax quietly', hint: 'A quiet activity helps you settle down.' },
-      { text: '💡 Turn off the lights', hint: 'Lights go off right before getting into bed.' },
-      { text: '🛏️ Get into bed', hint: 'The very last step is lying down to sleep.' },
-    ],
-  },
-  {
-    name: 'Cooking a Simple Meal',
-    steps: [
-      { text: '🧼 Wash your hands', hint: 'Always start by washing your hands.' },
-      { text: '🥕 Wash and prepare the vegetables', hint: 'Prepare ingredients before cooking them.' },
-      { text: '🍳 Heat the pan', hint: 'Heat the pan once ingredients are ready.' },
-      { text: '🥘 Cook the food', hint: 'Cooking happens after the pan is hot.' },
-      { text: '🍽️ Put the food on a plate', hint: 'Plate the food once it is cooked.' },
-      { text: '🍴 Sit down and eat', hint: 'Eating is always the last step.' },
-    ],
-  },
-  {
-    name: 'Doing the Laundry',
-    steps: [
-      { text: '👚 Sort clothes into piles', hint: 'Sort clothes before washing them.' },
-      { text: '🧺 Put clothes in the washing machine', hint: 'Load the machine after sorting.' },
-      { text: '🧴 Add detergent', hint: 'Add soap once the clothes are in.' },
-      { text: '▶️ Start the machine', hint: 'Start the wash after adding detergent.' },
-      { text: '🌬️ Dry the clothes', hint: 'Drying comes after washing.' },
-      { text: '📐 Fold the clothes', hint: 'Fold once everything is dry.' },
-    ],
-  },
-];
+  // Time allowed to view sequence adjusts to cognitive stage
+  const displayTimeMs = Math.max(2000, 1500 + length * 600);
 
-let lastRoutineTheme = -1;
-function generateRoutine(level) {
-  const themeIdx = pickIndexAvoidingRepeat('routine', ROUTINE_THEMES.length);
-  lastRoutineTheme = themeIdx;
-  const theme = ROUTINE_THEMES[themeIdx];
-  const count = clamp(3 + Math.floor((level - 1) / 2), 3, theme.steps.length);
-  const steps = theme.steps.slice(0, count);
   return {
-    themeName: theme.name,
-    steps: steps.map((s) => s.text),
-    hints: steps.map((s) => s.hint),
+    sequence,
+    availableTiles,
+    displayTimeMs,
+    theme: selectedTheme,
   };
 }
 
 // =============================================================================
-// 3. PATTERN QUEST
+// 2. ROUTINE BUILDER - Functional Independence Everyday Tasks (20+ Themes)
 // =============================================================================
 
-const PATTERN_EMOJI_SETS = [
-  ['🔴', '🔵', '🟢', '🟡', '🟣'],
-  ['🐶', '🐱', '🐭', '🐹', '🐰'],
-  ['⭐', '🌙', '☀️', '☁️', '⚡'],
-  ['🍎', '🍌', '🍇', '🍊', '🍓'],
-  ['🔺', '🔵', '🟦', '⬛', '⬜'],
+const ROUTINE_CATALOG = [
+  {
+    name: 'Making Morning Masala Chai',
+    steps: [
+      { text: '🚰 Measure cold water into the saucepan', hint: 'Start with fresh water as the base.' },
+      { text: '🫚 Crush fresh ginger and cardamom pods', hint: 'Aromatic spices need to be crushed before adding.' },
+      { text: '🔥 Boil spices with tea leaves', hint: 'Let the spices release their aroma in the boiling water.' },
+      { text: '🥛 Pour in fresh milk and sugar', hint: 'Milk goes in after the tea has infused.' },
+      { text: '⏳ Simmer until a golden foam rises', hint: 'Allow the chai to brew into its rich color.' },
+      { text: '🫖 Strain into a warm cup', hint: 'Filter out the leaves and spices.' },
+      { text: '☕ Savor your hot morning chai', hint: 'Always sit back and enjoy!' },
+    ],
+  },
+  {
+    name: 'Planting a Tomato Sapling',
+    steps: [
+      { text: '🧤 Slip on comfortable gardening gloves', hint: 'Protect your hands before handling tools and soil.' },
+      { text: '🪴 Fill the pot with nutrient-rich compost', hint: 'Create a healthy foundation for the roots.' },
+      { text: '🌱 Gently dig a hole in the center', hint: 'Make room before placing the sapling.' },
+      { text: '🌿 Lower the sapling and firm the soil', hint: 'Support the stem by gently pressing down around it.' },
+      { text: '💧 Water thoroughly at the base', hint: 'Watering helps the roots settle in.' },
+      { text: '☀️ Place the pot in warm morning sunlight', hint: 'Tomatoes need plenty of gentle sunlight to grow.' },
+    ],
+  },
+  {
+    name: 'Taking Morning Medication Safely',
+    steps: [
+      { text: '🧼 Wash hands thoroughly with soap', hint: 'Clean hands ensure hygiene before handling medicines.' },
+      { text: '📅 Check the day and date on the pill box', hint: 'Always verify the right compartment first.' },
+      { text: '🥛 Pour a full glass of fresh drinking water', hint: 'Having water ready prevents dry swallowing.' },
+      { text: '💊 Take the morning tablets one by one', hint: 'Swallow with steady sips of water.' },
+      { text: '✅ Close the pill organizer securely', hint: 'Keeps medications fresh and organized for tomorrow.' },
+    ],
+  },
+  {
+    name: 'Washing and Hanging Clothes',
+    steps: [
+      { text: '🧺 Sort dark and white clothes into piles', hint: 'Sorting prevents colors from bleeding.' },
+      { text: '🧼 Add mild washing powder to the bucket', hint: 'Dissolve detergent in water first.' },
+      { text: '👕 Soak and gently wash the garments', hint: 'Clean the fabrics with water.' },
+      { text: '🚰 Rinse in clear fresh water', hint: 'Wash away all leftover soap.' },
+      { text: '🌬️ Squeeze gently and hang on the clothesline', hint: 'Sunlight and breeze dry the clothes naturally.' },
+      { text: '🧷 Clip with clothespins to prevent slipping', hint: 'Pins keep everything secure.' },
+    ],
+  },
+  {
+    name: 'Preparing a Fresh Fruit Salad',
+    steps: [
+      { text: '🧼 Wash apples, bananas, and grapes in clean water', hint: 'Always wash fruits before peeling.' },
+      { text: '🍌 Peel the bananas and core the apples', hint: 'Remove skins and inedible cores.' },
+      { text: '🔪 Slice fruits into bite-sized pieces', hint: 'Even slices make the salad pleasant to eat.' },
+      { text: '🥣 Place all pieces together in a large ceramic bowl', hint: 'Mix the colorful fruits.' },
+      { text: '🍯 Drizzle with a spoonful of honey and mint', hint: 'Garnish adds gentle sweetness.' },
+      { text: '🍴 Serve fresh with small forks', hint: 'Enjoy your nutritious treat.' },
+    ],
+  },
+  {
+    name: 'Cozy Evening Bedtime Routine',
+    steps: [
+      { text: '📺 Turn off the television and bright screens', hint: 'Dimming screens signals the brain it is time to relax.' },
+      { text: '🪥 Brush teeth and rinse with warm water', hint: 'Dental hygiene before bed.' },
+      { text: '👘 Change into loose, comfortable cotton nightwear', hint: 'Comfortable clothing aids deep sleep.' },
+      { text: '📖 Read a page of an inspiring book or listen to soft music', hint: 'Calms the thoughts before sleep.' },
+      { text: '💡 Switch off the overhead light and keep the night lamp on', hint: 'Soft illumination creates peace.' },
+      { text: '🛏️ Rest comfortably under a light blanket', hint: 'Lie down and breathe peacefully.' },
+    ],
+  },
+  {
+    name: 'Baking Warm Bread',
+    steps: [
+      { text: '🌾 Measure flour and dry yeast into a bowl', hint: 'Dry ingredients are combined first.' },
+      { text: '💧 Add warm water and a pinch of salt', hint: 'Liquid activates the yeast.' },
+      { text: '🥣 Knead the dough until soft and elastic', hint: 'Kneading builds the structure.' },
+      { text: '⏳ Cover with a damp cloth and let it rise', hint: 'Dough needs quiet time to double in size.' },
+      { text: '🍞 Shape into a loaf and bake in the oven', hint: 'Heat turns dough into golden bread.' },
+      { text: '🧈 Slice warm and spread a pat of fresh butter', hint: 'Enjoy the aroma of fresh bread.' },
+    ],
+  },
 ];
 
-function buildOptions(correctAnswer, pool) {
-  const distractorPool = pool.filter((p) => p !== correctAnswer);
-  const distractors = sample(distractorPool, Math.min(3, distractorPool.length));
-  return shuffle([correctAnswer, ...distractors]);
+function generateRoutine(level) {
+  const themeIdx = pickIndexAvoidingRepeat('routine', ROUTINE_CATALOG.length);
+  const theme = ROUTINE_CATALOG[themeIdx];
+
+  // Number of steps scales from 3 (Level 1) to full steps (Level 5+)
+  const count = clamp(3 + Math.floor((level - 1) / 2), 3, theme.steps.length);
+  const selectedSteps = theme.steps.slice(0, count);
+
+  return {
+    themeName: theme.name,
+    steps: selectedSteps.map(s => s.text),
+    hints: selectedSteps.map(s => s.hint),
+    correctOrder: selectedSteps.map(s => s.text),
+  };
 }
+
+// =============================================================================
+// 3. PATTERN QUEST - 6 Algorithmic Pattern Types & Infinite Combinations
+// =============================================================================
+
+const PATTERN_SETS = [
+  ['🔴', '🔵', '🟢', '🟡', '🟣', '🟠'],
+  ['⭐', '🌙', '☀️', '☁️', '⚡', '🌈'],
+  ['🍎', '🍌', '🍇', '🍊', '🍓', '🍉'],
+  ['🐶', '🐱', '🐭', '🐰', '🦊', '🐼'],
+  ['🔺', '🟦', '🟡', '⬛', '⭐', '🔷'],
+  ['🌸', '🌺', '🌻', '🌷', '🌾', '🍀'],
+  ['🚗', '✈️', '⛵', '🚂', '🚲', '🚁'],
+];
 
 function generatePattern(level) {
-  const setIdx = pickIndexAvoidingRepeat('pattern-set', PATTERN_EMOJI_SETS.length);
-  const pool = PATTERN_EMOJI_SETS[setIdx];
+  const setIdx = pickIndexAvoidingRepeat('pattern-set', PATTERN_SETS.length);
+  const pool = PATTERN_SETS[setIdx];
 
-  // Pick a rule style; more complex rules unlock as level rises.
-  const complexity = level < 3 ? 0 : level < 6 ? rand(2) : level < 10 ? rand(3) : rand(4);
+  // Complexity scales with level (0: ABAB, 1: ABCABC, 2: AABBAABB, 3: Growing A, AB, ABB, 4: Mirror ABC-CBA)
+  const patternType = level <= 2 ? 0 : level <= 4 ? rand(2) : level <= 7 ? rand(3) : rand(5);
 
   let sequence = [];
-  let correctAnswer;
-  const visibleLength = clamp(4 + Math.floor((level - 1) / 3), 4, 12);
+  let correctAnswer = '';
+  const length = clamp(4 + Math.floor(level / 3), 4, 10);
 
-  if (complexity === 0) {
-    // Simple A-B-A-B repeat
+  if (patternType === 0) {
+    // A - B - A - B ...
     const [a, b] = sample(pool, 2);
-    for (let i = 0; i < visibleLength; i++) sequence.push(i % 2 === 0 ? a : b);
-    correctAnswer = visibleLength % 2 === 0 ? a : b;
-  } else if (complexity === 1) {
-    // Three-item repeating cycle
+    for (let i = 0; i < length; i++) sequence.push(i % 2 === 0 ? a : b);
+    correctAnswer = length % 2 === 0 ? a : b;
+  } else if (patternType === 1) {
+    // A - B - C - A - B - C ...
     const [a, b, c] = sample(pool, 3);
     const cycle = [a, b, c];
-    for (let i = 0; i < visibleLength; i++) sequence.push(cycle[i % 3]);
-    correctAnswer = cycle[visibleLength % 3];
-  } else if (complexity === 2) {
-    // Growing groups: A, AB, AB B, ... (increasing repeats of one symbol)
+    for (let i = 0; i < length; i++) sequence.push(cycle[i % 3]);
+    correctAnswer = cycle[length % 3];
+  } else if (patternType === 2) {
+    // A - A - B - B - A - A - B ...
     const [a, b] = sample(pool, 2);
-    let n = 1;
-    while (sequence.length < visibleLength) {
-      for (let i = 0; i < n && sequence.length < visibleLength; i++) sequence.push(a);
-      if (sequence.length < visibleLength) sequence.push(b);
-      n++;
+    const cycle = [a, a, b, b];
+    for (let i = 0; i < length; i++) sequence.push(cycle[i % 4]);
+    correctAnswer = cycle[length % 4];
+  } else if (patternType === 3) {
+    // Growing groups: A, B, A, BB, A, BBB, ...
+    const [a, b] = sample(pool, 2);
+    let countB = 1;
+    while (sequence.length < length) {
+      sequence.push(a);
+      if (sequence.length >= length) break;
+      for (let k = 0; k < countB && sequence.length < length; k++) {
+        sequence.push(b);
+      }
+      countB++;
     }
-    correctAnswer = sequence[sequence.length - 1] === a ? b : a;
-    sequence = sequence.slice(0, visibleLength);
+    // Determine the next element
+    const lastItem = sequence[sequence.length - 1];
+    correctAnswer = lastItem === a ? b : (sequence[sequence.length - 2] === a ? b : a);
   } else {
-    // Mirror / palindrome pattern: ABC CBA ABC ...
+    // Symmetrical mirror: A - B - C - C - B - A
     const [a, b, c] = sample(pool, 3);
-    const block = [a, b, c, c, b, a];
-    for (let i = 0; i < visibleLength; i++) sequence.push(block[i % block.length]);
-    correctAnswer = block[visibleLength % block.length];
+    const mirror = [a, b, c, c, b, a];
+    for (let i = 0; i < length; i++) sequence.push(mirror[i % 6]);
+    correctAnswer = mirror[length % 6];
   }
+
+  // Create 4 distinct choices (1 correct + 3 unique distractors)
+  const distractorPool = pool.filter(item => item !== correctAnswer);
+  const distractors = sample(distractorPool, 3);
+  const options = shuffle([correctAnswer, ...distractors]);
 
   sequence.push('?');
-  const optionCount = clamp(3 + Math.floor(level / 6), 3, 6);
-  const options = buildOptions(correctAnswer, pool).slice(0, optionCount);
-  // Make sure the correct answer survived the slice
-  if (!options.includes(correctAnswer)) options[rand(options.length)] = correctAnswer;
 
-  return { pattern: sequence, options: shuffle(options), correctAnswer };
+  return {
+    pattern: sequence,
+    options,
+    correctAnswer,
+  };
 }
 
 // =============================================================================
-// 4. STORY WEAVER
+// 4. STORY WEAVER - Real-Time Dynamic Story & Scaling Questions Engine
 // =============================================================================
 
-const STORY_POOL = [
-  {
-    title: 'The Market Morning',
-    story:
-      'Maya walked to the market early in the morning to buy fresh vegetables. She bought tomatoes, onions, and a bunch of bananas. On her way home, she stopped to say hello to her neighbor, Mr. Rao, who was watering his plants.',
-    questions: [
-      { q: 'What did Maya buy at the market?', options: ['Tomatoes, onions, and bananas', 'Rice and milk', 'Flowers', 'Shoes'], correctAnswer: 'Tomatoes, onions, and bananas' },
-      { q: 'Who was Maya\'s neighbor?', options: ['Mr. Rao', 'Mrs. Singh', 'Dr. Verma', 'Her sister'], correctAnswer: 'Mr. Rao' },
-      { q: 'What was Mr. Rao doing?', options: ['Watering his plants', 'Reading a book', 'Cooking', 'Sleeping'], correctAnswer: 'Watering his plants' },
-    ],
-  },
-  {
-    title: 'The Rainy Afternoon',
-    story:
-      'It started raining heavily in the afternoon. Priya closed all the windows and made a cup of hot ginger tea. She sat by the window and watched the rain fall on the garden while listening to old songs on the radio.',
-    questions: [
-      { q: 'What did Priya make?', options: ['Ginger tea', 'Coffee', 'Lemonade', 'Soup'], correctAnswer: 'Ginger tea' },
-      { q: 'What did Priya do first when it started raining?', options: ['Closed the windows', 'Went outside', 'Called a friend', 'Turned off the lights'], correctAnswer: 'Closed the windows' },
-      { q: 'What was Priya listening to?', options: ['Old songs on the radio', 'The news', 'A cricket match', 'Nothing'], correctAnswer: 'Old songs on the radio' },
-    ],
-  },
-  {
-    title: 'The Birthday Surprise',
-    story:
-      'It was Grandma\'s 70th birthday. Her grandchildren baked a chocolate cake and decorated the living room with balloons and colorful lights. When Grandma walked in, everyone shouted "Surprise!" and she smiled with joyful tears.',
-    questions: [
-      { q: 'How old was Grandma turning?', options: ['70', '60', '80', '50'], correctAnswer: '70' },
-      { q: 'What flavor cake did they bake?', options: ['Chocolate', 'Vanilla', 'Strawberry', 'Lemon'], correctAnswer: 'Chocolate' },
-      { q: 'How did they decorate the room?', options: ['Balloons and colorful lights', 'Flowers only', 'Candles only', 'Photographs'], correctAnswer: 'Balloons and colorful lights' },
-    ],
-  },
-  {
-    title: 'The Morning Walk',
-    story:
-      'Every morning, Arjun and his dog Bruno walk around the park before sunrise. They pass the old banyan tree, cross the small wooden bridge, and stop at the bench near the pond to rest for a few minutes before heading home.',
-    questions: [
-      { q: "What is Arjun's dog called?", options: ['Bruno', 'Rocky', 'Tommy', 'Max'], correctAnswer: 'Bruno' },
-      { q: 'What do they cross during their walk?', options: ['A small wooden bridge', 'A busy road', 'A river', 'A hill'], correctAnswer: 'A small wooden bridge' },
-      { q: 'Where do they rest?', options: ['A bench near the pond', 'Under the banyan tree', 'At home', 'At a cafe'], correctAnswer: 'A bench near the pond' },
-    ],
-  },
-  {
-    title: 'The Lost Kitten',
-    story:
-      'A small grey kitten wandered into Meera\'s courtyard one evening, meowing softly. Meera gave it a bowl of warm milk and made a cozy bed from an old blanket. The next day, she found the kitten\'s owner, a young boy from two houses down the street.',
-    questions: [
-      { q: 'What color was the kitten?', options: ['Grey', 'Black', 'White', 'Orange'], correctAnswer: 'Grey' },
-      { q: 'What did Meera give the kitten?', options: ['A bowl of warm milk', 'Fish', 'Bread', 'Nothing'], correctAnswer: 'A bowl of warm milk' },
-      { q: "Who was the kitten's owner?", options: ['A young boy from two houses down', 'Meera herself', 'A shopkeeper', 'No one'], correctAnswer: 'A young boy from two houses down' },
-    ],
-  },
-  {
-    title: 'The Family Picnic',
-    story:
-      'On Sunday, the whole family packed sandwiches, fruit, and a big flask of lemonade for a picnic by the river. The children played with a kite while the elders sat on a mat, chatting and enjoying the cool breeze under a large tree.',
-    questions: [
-      { q: 'Where did the family have their picnic?', options: ['By the river', 'At the beach', 'In the mountains', 'In their backyard'], correctAnswer: 'By the river' },
-      { q: 'What did the children play with?', options: ['A kite', 'A football', 'Cards', 'A ball'], correctAnswer: 'A kite' },
-      { q: 'What did they pack to drink?', options: ['Lemonade', 'Tea', 'Juice boxes', 'Milk'], correctAnswer: 'Lemonade' },
-    ],
-  },
-  {
-    title: 'The New Bookshop',
-    story:
-      'A new bookshop opened at the corner of the street, painted bright blue with a small bell above the door. Inside, the owner, Mrs. Iyer, arranged the books by color instead of by subject, which made the shop look like a rainbow.',
-    questions: [
-      { q: 'What color was the bookshop painted?', options: ['Blue', 'Red', 'Green', 'Yellow'], correctAnswer: 'Blue' },
-      { q: "What was the shop owner's name?", options: ['Mrs. Iyer', 'Mr. Rao', 'Ms. Das', 'Mrs. Kapoor'], correctAnswer: 'Mrs. Iyer' },
-      { q: 'How were the books arranged?', options: ['By color', 'By subject', 'By author', 'By size'], correctAnswer: 'By color' },
-    ],
-  },
-  {
-    title: 'The Village Fair',
-    story:
-      'The annual village fair brought stalls of sweets, handmade toys, and puppet shows to the town square. Ravi won a small wooden elephant by throwing rings onto bottles, and he gave it to his little sister as a gift.',
-    questions: [
-      { q: 'What did Ravi win?', options: ['A small wooden elephant', 'A balloon', 'A candy box', 'A puppet'], correctAnswer: 'A small wooden elephant' },
-      { q: 'How did Ravi win the prize?', options: ['Throwing rings onto bottles', 'A running race', 'A singing contest', 'Guessing a number'], correctAnswer: 'Throwing rings onto bottles' },
-      { q: 'Who did Ravi give the gift to?', options: ['His little sister', 'His mother', 'A friend', 'He kept it'], correctAnswer: 'His little sister' },
-    ],
-  },
+const STORY_CHARACTERS = [
+  { name: 'Maya', role: 'a beloved retired schoolteacher', trait: 'who loved morning gardening' },
+  { name: 'Rajiv', role: 'a skilled train engineer', trait: 'who had a pocket watch from his grandfather' },
+  { name: 'Anita', role: 'a celebrated home baker', trait: 'known for her cinnamon cardamoms' },
+  { name: 'Gopal', role: 'a gentle village botanist', trait: 'who nurtured rare orchids' },
+  { name: 'Sunita', role: 'a classical violin teacher', trait: 'who practiced by the open balcony' },
+  { name: 'Vikram', role: 'an amateur astronomer', trait: 'who loved counting stars through his brass telescope' },
+  { name: 'Kavita', role: 'an artist who painted pottery', trait: 'with turquoise and golden glazes' },
+  { name: 'Dev', role: 'a friendly librarian', trait: 'who always knew the exact book to recommend' },
 ];
 
-let usedStoryIds = [];
-function generateStory(level) {
-  if (usedStoryIds.length >= STORY_POOL.length) usedStoryIds = [];
-  let idx = rand(STORY_POOL.length);
+const STORY_SETTINGS = [
+  { place: 'the riverside flower market', time: 'early at sunrise', detail: 'fresh jasmine garlands were blooming' },
+  { place: 'the hillside tea bungalow', time: 'on a cool misty morning', detail: 'dew drops glistened on tea leaves' },
+  { place: 'the heritage courtyard garden', time: 'under the shade of a grandfather banyan tree', detail: 'parrots were singing above' },
+  { place: 'the tranquil village pottery studio', time: 'on a warm summer afternoon', detail: 'the potter wheel was spinning smoothly' },
+  { place: 'the cozy town bakery', time: 'just as the morning bread came out of the oven', detail: 'the street smelled of warm honey' },
+  { place: 'the serene canal-side walkway', time: 'at twilight as lanterns were lit', detail: 'wooden boats floated quietly by' },
+];
+
+const STORY_OBJECTS = [
+  { item: 'a brass bell with a carved lotus', found: 'wrapped in a blue silk handkerchief', color: 'golden brass' },
+  { item: 'a vintage basket of sweet Alphonso mangoes', found: 'tied with a red velvet ribbon', color: 'sunshine yellow' },
+  { item: 'an antique wooden music box', found: 'tucked carefully inside a cedarwood chest', color: 'carved walnut' },
+  { item: 'a bouquet of rare blue mountain lilies', found: 'freshly gathered from the high ridge', color: 'deep azure' },
+  { item: 'a handwritten recipe book from 1952', found: 'resting on the antique mahogany bookshelf', color: 'aged parchment' },
+];
+
+const STORY_HELPERS = [
+  { name: 'young Kabir', action: 'arrived on his green bicycle to deliver the morning post' },
+  { name: 'cheerful Mrs. Rao', action: 'brought over a jar of freshly squeezed lemonade' },
+  { name: 'friendly neighbor Arjun', action: 'offered to help carry the heavy wicker baskets' },
+  { name: 'little Priya', action: 'brought a lost grey kitten with white paws to share warmth' },
+];
+
+/**
+ * Procedurally generates an infinite, real-time story tailored to patient level.
+ * Scaling: Level 1 = 2 questions, Level 2 = 3 questions, Level 3 = 4 questions, Level 4+ = 5 questions.
+ * Narrative grows richer and longer with each stage.
+ */
+export function generateProceduralStory(level) {
+  const char = STORY_CHARACTERS[rand(STORY_CHARACTERS.length)];
+  const setting = STORY_SETTINGS[rand(STORY_SETTINGS.length)];
+  const obj = STORY_OBJECTS[rand(STORY_OBJECTS.length)];
+  const helper = STORY_HELPERS[rand(STORY_HELPERS.length)];
+
+  const isAdvanced = level >= 3;
+  const isExpert = level >= 5;
+
+  let storyParagraphs = [];
+
+  // Scene 1: Introduction
+  storyParagraphs.push(
+    `One bright day, ${char.name}, ${char.role} ${char.trait}, set out toward ${setting.place} ${setting.time}. As ${char.name} arrived, ${setting.detail}.`
+  );
+
+  // Scene 2: The discovery
+  storyParagraphs.push(
+    `While walking along the cobblestone path, ${char.name} noticed ${obj.item}. It was ${obj.found}, radiating a distinctive ${obj.color} sheen that caught everyone's eye.`
+  );
+
+  // Scene 3: The arrival of helper (Levels 2+)
+  if (level >= 2) {
+    storyParagraphs.push(
+      `Just then, ${helper.name} ${helper.action}. Together, they shared warm laughter and decided to celebrate the moment.`
+    );
+  }
+
+  // Scene 4: Conclusion & memory milestone (Levels 4+)
+  if (isAdvanced) {
+    const celebratoryTime = level % 2 === 0 ? 'exactly at four in the afternoon' : 'just before the sunset bells rang';
+    storyParagraphs.push(
+      `They gathered around the wooden porch bench ${celebratoryTime}. ${char.name} smiled warmly and remarked that simple kindness makes every day unforgettable.`
+    );
+  }
+
+  const fullStory = storyParagraphs.join(' ');
+  const title = `${char.name} and the ${obj.item.split(' ').slice(-2).join(' ')}`;
+
+  // Generate Questions dynamically based on elements present in the story
+  const candidateQuestions = [
+    {
+      q: `Who was the main character in the story?`,
+      correctAnswer: char.name,
+      options: shuffle([char.name, 'Dr. Sharma', 'Inspector Verma', 'Farmer Ramesh']),
+    },
+    {
+      q: `Where did the story take place?`,
+      correctAnswer: setting.place.charAt(0).toUpperCase() + setting.place.slice(1),
+      options: shuffle([
+        setting.place.charAt(0).toUpperCase() + setting.place.slice(1),
+        'The crowded city subway station',
+        'An empty desert highway',
+        'An airport departure gate',
+      ]),
+    },
+    {
+      q: `What notable item did ${char.name} discover?`,
+      correctAnswer: obj.item.charAt(0).toUpperCase() + obj.item.slice(1),
+      options: shuffle([
+        obj.item.charAt(0).toUpperCase() + obj.item.slice(1),
+        'A bundle of old newspapers',
+        'A rusty iron padlock',
+        'A pair of reading spectacles',
+      ]),
+    },
+    {
+      q: `How was the ${obj.item} described or found?`,
+      correctAnswer: obj.found.charAt(0).toUpperCase() + obj.found.slice(1),
+      options: shuffle([
+        obj.found.charAt(0).toUpperCase() + obj.found.slice(1),
+        'Submerged under deep river water',
+        'Locked in an iron vault',
+        'Covered in thick dust on a roof',
+      ]),
+    },
+  ];
+
+  if (level >= 2) {
+    candidateQuestions.push({
+      q: `Who arrived to help and share the moment?`,
+      correctAnswer: helper.name,
+      options: shuffle([helper.name, 'A mysterious stranger', 'The town mayor', 'A postal clerk']),
+    });
+  }
+
+  if (isAdvanced) {
+    candidateQuestions.push({
+      q: `What color or appearance was highlighted for the item?`,
+      correctAnswer: obj.color.charAt(0).toUpperCase() + obj.color.slice(1),
+      options: shuffle([
+        obj.color.charAt(0).toUpperCase() + obj.color.slice(1),
+        'Dull charcoal grey',
+        'Bright neon pink',
+        'Faded brown cardboard',
+      ]),
+    });
+  }
+
+  // Question count scales with stage: Level 1=2, Level 2=3, Level 3=4, Level 4+=5
+  const targetQuestionCount = clamp(2 + Math.floor((level - 1) / 1.5), 2, 5);
+  const questions = candidateQuestions.slice(0, targetQuestionCount);
+
+  return {
+    title,
+    story: fullStory,
+    questions,
+    level,
+    wordCount: fullStory.split(' ').length,
+  };
+}
+
+// =============================================================================
+// 5. FACE & PLACE - Independent Randomized Matching Engine (40+ Roles)
+// =============================================================================
+
+export const FACE_PLACE_MASTER = [
+  { face: '👨‍🍳', name: 'Master Chef', place: '🍳', location: 'Commercial Kitchen', hint: 'Prepares delicious culinary dishes' },
+  { face: '👩‍⚕️', name: 'Caring Doctor', place: '🏥', location: 'Community Hospital', hint: 'Treats patients and helps healing' },
+  { face: '👨‍🏫', name: 'School Teacher', place: '🏫', location: 'Elementary School', hint: 'Educates children in classrooms' },
+  { face: '👩‍🌾', name: 'Organic Farmer', place: '🌾', location: 'Golden Harvest Farm', hint: 'Grows vegetables and crops' },
+  { face: '👨‍✈️', name: 'Airline Pilot', place: '✈️', location: 'International Airport', hint: 'Navigates passenger flights in the skies' },
+  { face: '👩‍🎨', name: 'Fine Artist', place: '🎨', location: 'Art Gallery & Studio', hint: 'Paints vibrant canvas masterpieces' },
+  { face: '👨‍🚒', name: 'Brave Firefighter', place: '🚒', location: 'City Fire Station', hint: 'Drives fire rescue engines' },
+  { face: '👩‍🔬', name: 'Research Scientist', place: '🔬', location: 'Chemistry Laboratory', hint: 'Conducts science experiments' },
+  { face: '👨‍🦳', name: 'Loving Grandfather', place: '🏠', location: 'Cozy Family Home', hint: 'Relaxes in his favorite armchair' },
+  { face: '👩‍🚀', name: 'Astronaut', place: '🚀', location: 'Orbital Space Station', hint: 'Explores outer space zero-gravity' },
+  { face: '👨‍🔧', name: 'Auto Mechanic', place: '🔧', location: 'Vehicle Garage', hint: 'Repairs engines and cars' },
+  { face: '👩‍⚖️', name: 'Presiding Judge', place: '⚖️', location: 'Supreme Courthouse', hint: 'Upholds fair justice and law' },
+  { face: '👨‍🎤', name: 'Concert Singer', place: '🎵', location: 'Musical Auditorium', hint: 'Performs live songs on stage' },
+  { face: '👩‍💻', name: 'Software Engineer', place: '💻', location: 'Tech Innovation Hub', hint: 'Develops helpful computer programs' },
+  { face: '👨‍🦱', name: 'Quiet Librarian', place: '📚', location: 'Public Reading Library', hint: 'Organizes rows of knowledge books' },
+  { face: '👩‍🌾', name: 'Botanical Gardener', place: '🪴', location: 'Floral Greenhouse', hint: 'Nurtures orchids and flowering shrubs' },
+  { face: '👨‍✈️', name: 'Sea Captain', place: '🚢', location: 'Harbor Shipping Port', hint: 'Guides large ships across oceans' },
+  { face: '👩‍🍳', name: 'Pastry Baker', place: '🥐', location: 'Artisan Bakery', hint: 'Bakes fresh warm breads and pastries' },
+  { face: '👨‍🎨', name: 'Ceramic Potter', place: '🏺', location: 'Clay Pottery Kiln', hint: 'Shapes clay vessels on the wheel' },
+  { face: '👩‍⚕️', name: 'Gentle Nurse', place: '💊', location: 'Wellness Clinic', hint: 'Administers daily medical care' },
+];
+
+/**
+ * Generates Face & Place round with INDEPENDENT random layout.
+ * Ensures the places are completely decoupled in order and position from the faces!
+ */
+function generateFacePlacePairs(level) {
+  // Pair count: Level 1=3 pairs, Level 2=4, Level 3=5, Level 4+=6 (up to 8)
+  const count = clamp(3 + Math.floor((level - 1) / 1.5), 3, 7);
+
+  // Pick unique items from the pool
+  const selectedPairs = sample(FACE_PLACE_MASTER, count);
+
+  // Independently shuffle faces and places so their order in the UI is NEVER identical!
+  const shuffledFaces = shuffle(selectedPairs.map((p, idx) => ({ ...p, originalIdx: idx })));
+  let shuffledPlaces = shuffle(selectedPairs.map((p, idx) => ({ ...p, originalIdx: idx })));
+
+  // Guard: Ensure slot i in places is NOT the match for slot i in faces
   let guard = 0;
-  while (usedStoryIds.includes(idx) && guard < 10) {
-    idx = rand(STORY_POOL.length);
+  while (shuffledPlaces.some((pl, i) => pl.face === shuffledFaces[i].face) && guard < 10) {
+    shuffledPlaces = shuffle(shuffledPlaces);
     guard++;
   }
-  usedStoryIds.push(idx);
 
-  const base = STORY_POOL[idx];
-  const questionCount = clamp(1 + Math.floor((level - 1) / 3), 1, base.questions.length);
-  const questions = sample(base.questions, questionCount).map((q) => ({
-    q: q.q,
-    correctAnswer: q.correctAnswer,
-    options: shuffle(q.options),
-  }));
-
-  return { title: base.title, story: base.story, questions };
+  return {
+    pairs: selectedPairs,
+    shuffledFaces,
+    shuffledPlaces,
+    level,
+  };
 }
 
 // =============================================================================
-// 5. FACE & PLACE - AI GENERATOR (Infinite Stages)
+// 6. CARD FLIP (Memory Match with Infinite Procedural Sets)
 // =============================================================================
 
-// Each face is bound directly to its real-world matching place, as one
-// unit. This is the source of truth for "correct" answers — it removes
-// any dependency on two separate arrays lining up by coincidence.
-const FACE_PLACE_PAIRS = [
-  { face: '👨‍🦳', name: 'Grandpa', faceDescription: 'Elderly man with white hair', place: '🏠', location: 'Home', placeDescription: 'A cozy house' },
-  { face: '👩‍🦰', name: 'Grandma', faceDescription: 'Elderly woman with red hair', place: '🏠', location: 'Home', placeDescription: 'A cozy house' },
-  { face: '👨‍🏫', name: 'Teacher', faceDescription: 'Man with glasses and a book', place: '🏫', location: 'School', placeDescription: 'A building with classrooms' },
-  { face: '👩‍⚕️', name: 'Doctor', faceDescription: 'Woman wearing a white coat', place: '🏥', location: 'Hospital', placeDescription: 'A place with a red cross' },
-  { face: '👨‍🍳', name: 'Chef', faceDescription: 'Man wearing a chef hat', place: '🍳', location: 'Kitchen', placeDescription: 'A room with cooking utensils' },
-  { face: '👩‍🎨', name: 'Artist', faceDescription: 'Woman with a paint palette', place: '🎨', location: 'Studio', placeDescription: 'A room with art supplies' },
-  { face: '👨‍🔧', name: 'Mechanic', faceDescription: 'Man wearing a cap and holding tools', place: '🔧', location: 'Garage', placeDescription: 'A place with tools and cars' },
-  { face: '👩‍🌾', name: 'Farmer', faceDescription: 'Woman wearing a straw hat', place: '🌾', location: 'Farm', placeDescription: 'A field with crops' },
-  { face: '👨‍✈️', name: 'Pilot', faceDescription: 'Man in a pilot uniform', place: '✈️', location: 'Airport', placeDescription: 'A place with airplanes' },
-  { face: '👩‍🚀', name: 'Astronaut', faceDescription: 'Woman in a space suit', place: '🚀', location: 'Space Station', placeDescription: 'A place in outer space' },
-  { face: '👨‍🎤', name: 'Singer', faceDescription: 'Man holding a microphone', place: '🎵', location: 'Stage', placeDescription: 'A place with a microphone' },
-  { face: '👩‍💻', name: 'Programmer', faceDescription: 'Woman working on a computer', place: '💻', location: 'Office', placeDescription: 'A room with computers' },
-  { face: '👨‍🔬', name: 'Scientist', faceDescription: 'Man wearing a lab coat', place: '🔬', location: 'Lab', placeDescription: 'A place with scientific equipment' },
-  { face: '👩‍🏫', name: 'Professor', faceDescription: 'Woman with a graduation cap', place: '🏛️', location: 'College', placeDescription: 'A building with graduation caps' },
-  { face: '👨‍⚖️', name: 'Judge', faceDescription: 'Man in a court robe', place: '⚖️', location: 'Court', placeDescription: 'A room with a judge\'s bench' },
-  { face: '👩‍🎓', name: 'Graduate', faceDescription: 'Woman with a graduation cap', place: '📚', location: 'Library', placeDescription: 'A room filled with books' },
-  { face: '👨‍🚒', name: 'Firefighter', faceDescription: 'Man in a firefighter suit', place: '🚒', location: 'Fire Station', placeDescription: 'A place with fire trucks' },
-  { face: '👩‍🦱', name: 'Student', faceDescription: 'Young woman with curly hair', place: '🏫', location: 'School', placeDescription: 'A building with classrooms' },
+const CARD_POOL = [
+  '🐘', '🦏', '🦁', '🐯', '🐒', '🦋', '🐝', '🐞',
+  '🌸', '🌺', '🌻', '🌾', '🌳', '🌈', '☀️', '🌙',
+  '⭐', '🍎', '🍌', '🍇', '🥭', '🥥', '🪕', '🥁',
+  '🎨', '🎭', '🎪', '🎯', '🎲', '🎰', '🎸', '🎺',
+  '🏀', '⚽', '🎾', '🏓', '🍕', '🍔', '🌮', '🍩',
+  '🚗', '✈️', '⛵', '🚂', '🚲', '🚁', '🚀', '🏡',
 ];
 
-// Generate unique pairs for each level
-function generateFacePlacePairs(level) {
-  // Calculate number of pairs based on level (3 to 8 pairs)
-  const pairCount = Math.min(3 + Math.floor((level - 1) / 2), 8);
+function generateCardFlipGrid(level) {
+  // Pairs grow: Level 1=3 pairs (6 cards), Level 2=4 pairs (8 cards), Level 3=6 pairs (12 cards), Level 4=8 pairs (16 cards)
+  const pairCount = clamp(3 + Math.floor((level - 1) / 1.5), 3, 8);
+  const selectedEmojis = sample(CARD_POOL, pairCount);
 
-  // Shuffle the fixed face-place pairs, then pick pairCount of them,
-  // skipping any entry whose place is already taken this round (a
-  // couple of faces legitimately share a place, e.g. Grandpa/Grandma
-  // both belong at Home — only one of them can appear per round so
-  // every place shown stays uniquely tied to one visible face).
-  const shuffled = shuffleArray(FACE_PLACE_PAIRS);
-  const usedPlaces = new Set();
-  const selected = [];
+  const cards = [];
+  selectedEmojis.forEach((emoji, idx) => {
+    cards.push({ id: `c-${idx}-a`, emoji, pairId: idx });
+    cards.push({ id: `c-${idx}-b`, emoji, pairId: idx });
+  });
 
-  for (const entry of shuffled) {
-    if (selected.length >= pairCount) break;
-    if (usedPlaces.has(entry.place)) continue;
-    usedPlaces.add(entry.place);
-    selected.push(entry);
-  }
+  const shuffledCards = shuffle(cards);
+  // Time limit gives generous breathing room for dementia patients (25s + 6s per pair)
+  const timeLimit = 25 + pairCount * 6;
 
-  const pairs = selected.map(({ face, place, name, location, faceDescription, placeDescription }) => ({
-    face, place, name, location, faceDescription, placeDescription
-  }));
-
-  // Shuffle the pairs to mix them up
-  return shuffleArray(pairs);
+  return {
+    cards: shuffledCards,
+    pairs: pairCount,
+    timeLimit,
+    level,
+  };
 }
 
-// Helper function to shuffle array
-function shuffleArray(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
+// =============================================================================
+// Export Service
 // =============================================================================
 
 const AIGameService = {
   generateMemorySequence,
   generateRoutine,
   generatePattern,
-  generateStory,
+  generateStory: generateProceduralStory,
   generateFacePlacePairs,
   generateCardFlipGrid,
 };
-
-// =============================================================================
-// 6. CARD FLIP (MEMORY MATCH) - Infinite AI-Generated Stages
-// =============================================================================
-
-// Large pool of emojis for card matching
-const CARD_EMOJI_POOL = [
-  '🐘', '🦏', '🦁', '🐯', '🐒', '🦋', '🐝', '🐞',
-  '🌸', '🌺', '🌻', '🌾', '🌳', '🌈', '☀️', '🌙',
-  '⭐', '🍎', '🍌', '🍇', '🥭', '🥥', '🪕', '🥁',
-  '🎨', '🎭', '🎪', '🎯', '🎲', '🎰', '🎸', '🎺',
-  '🏀', '⚽', '🏈', '🎾', '🏐', '🏓', '🏸', '🥊',
-  '🍕', '🍔', '🍟', '🌮', '🍩', '🍪', '🍰', '🍫',
-  '🚗', '🚕', '🚙', '🚌', '🚎', '🏎️', '🚓', '🚑',
-];
-
-function generateCardFlipGrid(level) {
-  // Number of pairs grows: Level 1 = 3 pairs (6 cards), +1 pair every 2 levels, cap at 12 pairs (24 cards)
-  const pairs = clamp(3 + Math.floor((level - 1) / 2), 3, 12);
-  
-  // Pick random emojis from the pool
-  const selectedEmojis = sample(CARD_EMOJI_POOL, pairs);
-  
-  // Create pairs (each emoji appears twice)
-  const cards = [];
-  selectedEmojis.forEach((emoji, idx) => {
-    cards.push({ id: `${idx}-a`, emoji, pairId: idx });
-    cards.push({ id: `${idx}-b`, emoji, pairId: idx });
-  });
-  
-  // Shuffle the deck
-  const shuffled = shuffle(cards);
-  
-  // Calculate time limit
-  // Base time: 20s + (pairs * 5s) + (level * 1s)
-  const timeLimit = 20 + (pairs * 5) + level;
-  
-  return {
-    cards: shuffled,
-    pairs,
-    timeLimit,
-    level,
-  };
-}
 
 export default AIGameService;

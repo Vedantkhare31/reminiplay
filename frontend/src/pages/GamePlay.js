@@ -525,60 +525,75 @@ const GameOverScreen = ({ engine }) => (
 const CLICKABLE_MEMORY_TILES = ['🐘', '🦏', '🦁', '🐯', '🐒', '🦋', '🐝', '🐞', '🌸', '🌺',
    '🌻', '🌾', '🌳', '🌈', '☀️', '🌙', '⭐', '🍎', '🍌', '🍇', '🥭', '🥥', '🪕', '🥁'];
 
+// =============================================================================
+// GAME 1: MEMORY LANE (Sequential Progressive Recall Engine)
+// =============================================================================
+
 const MemoryLane = ({ engine }) => {
   const { t } = useTranslation();
-  const [sequence, setSequence] = useState([]);
-  const [userSequence, setUserSequence] = useState([]);
+  const [roundData, setRoundData] = useState(null);
+  const [revealedIndex, setRevealedIndex] = useState(-1);
   const [isShowing, setIsShowing] = useState(true);
-  const [availableTiles, setAvailableTiles] = useState([]);
+  const [userSequence, setUserSequence] = useState([]);
+  const [feedbackTile, setFeedbackTile] = useState(null);
 
   useEffect(() => {
     if (engine.showTutorial) return;
-    const newSequence = AIGameService.generateMemorySequence(engine.level);
-    setSequence(newSequence);
+    const data = AIGameService.generateMemorySequence(engine.level);
+    setRoundData(data);
     setUserSequence([]);
     setIsShowing(true);
+    setRevealedIndex(-1);
 
-    // Build the clickable tiles from the sequence itself plus some distractors
-    // This guarantees every item in the sequence IS clickable.
-    const uniqueSequenceItems = [...new Set(newSequence)];
-    const pool = CLICKABLE_MEMORY_TILES.filter(e => !uniqueSequenceItems.includes(e));
-    // Add enough distractors so the grid has at least 12 tiles for variety
-    const minTiles = 12;
-    const neededDistractors = Math.max(0, minTiles - uniqueSequenceItems.length);
-    const shuffledPool = [...pool].sort(() => Math.random() - 0.5);
-    const distractors = shuffledPool.slice(0, neededDistractors);
+    // Progressive item-by-item reveal for comfortable dementia cognitive pacing
+    let step = 0;
+    const interval = setInterval(() => {
+      setRevealedIndex(step);
+      engine.playSound('checkpoint');
+      step++;
+      if (step >= data.sequence.length) {
+        clearInterval(interval);
+        setTimeout(() => {
+          setIsShowing(false);
+          setRevealedIndex(-1);
+        }, 1200);
+      }
+    }, 850);
 
-    // Combine sequence items + distractors, then shuffle so position varies
-    const combined = [...uniqueSequenceItems, ...distractors]
-      .sort(() => Math.random() - 0.5);
-
-    setAvailableTiles(combined);
-
-    const t = setTimeout(() => setIsShowing(false), 1800 + newSequence.length * 400);
-    return () => clearTimeout(t);
+    return () => clearInterval(interval);
   }, [engine.sessionId, engine.showTutorial, engine.level]);
 
-  const handleEmojiClick = (emoji) => {
-    if (isShowing || engine.gameOver) return;
-    const position = userSequence.length;
-    const newUserSeq = [...userSequence, emoji];
-    setUserSequence(newUserSeq);
+  const handleTileClick = (emoji) => {
+    if (isShowing || engine.gameOver || !roundData) return;
+    const currentStep = userSequence.length;
+    const expected = roundData.sequence[currentStep];
 
-    if (emoji !== sequence[position]) {
+    setFeedbackTile(emoji);
+    setTimeout(() => setFeedbackTile(null), 300);
+
+    if (emoji === expected) {
+      engine.playSound('correct');
+      const nextSeq = [...userSequence, emoji];
+      setUserSequence(nextSeq);
+
+      if (nextSeq.length === roundData.sequence.length) {
+        // Sequence completely matched!
+        const pts = engine.recordCorrect(15 + engine.level * 2);
+        engine.pushToast(`🎉 Memory Master! +${pts} pts`, 'coin');
+        setTimeout(() => {
+          engine.levelUp();
+        }, 1200);
+      }
+    } else {
       engine.recordWrong();
-      return;
-    }
-
-    if (newUserSeq.length === sequence.length) {
-      engine.recordCorrect(10);
-      engine.levelUp();
+      setUserSequence([]); // Restart trial for current round
+      engine.pushToast('❌ Not quite! Watch closely and try again', 'wrong');
     }
   };
 
   if (engine.gameOver) return <GameOverScreen engine={engine} />;
 
-if (engine.showTutorial) {
+  if (engine.showTutorial) {
     return (
       <TutorialScreen
         gameName={t('games.memoryLane')}
@@ -595,38 +610,78 @@ if (engine.showTutorial) {
     );
   }
 
+  if (!roundData) return <div className="text-center p-8">Loading Memory Lane...</div>;
+
   return (
     <div className="space-y-6">
       <GameHeader engine={engine} />
-      <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg text-center">
-        <p className="text-xl">{isShowing ? '👀 Watch the sequence!' : '🔄 Repeat the sequence!'}</p>
-        <p className="text-sm text-gray-500">Items: {sequence.length} | Combo: {engine.combo}x</p>
+      <div className="bg-blue-50 dark:bg-blue-900/20 p-5 rounded-2xl text-center shadow-sm">
+        <p className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+          {isShowing ? '👀 Watch the sequence appear one by one!' : '🔄 Repeat the exact sequence in order!'}
+        </p>
+        <p className="text-sm text-gray-500 mt-1">
+          Stage Length: <span className="font-bold text-blue-600">{roundData.sequence.length} items</span> | Theme: <span className="capitalize font-semibold">{roundData.theme}</span>
+        </p>
       </div>
-      <div className="grid grid-cols-4 gap-4 max-w-md mx-auto">
-        {isShowing
-          ? sequence.map((emoji, index) => (
-            <div key={index} className="text-6xl p-4 bg-white dark:bg-gray-700 rounded-lg shadow text-center animate-pulse">
-              {emoji}
+
+      {/* Target Sequence Display */}
+      <div className="flex justify-center items-center gap-3 p-6 bg-white dark:bg-gray-800 rounded-2xl shadow-md min-h-[110px] flex-wrap max-w-xl mx-auto">
+        {isShowing ? (
+          roundData.sequence.map((emoji, idx) => (
+            <div
+              key={idx}
+              className={`text-5xl md:text-6xl p-3 rounded-2xl transition-all duration-300 ${
+                idx <= revealedIndex
+                  ? 'scale-110 shadow-lg bg-blue-100 dark:bg-blue-900/40 border-2 border-blue-400 animate-bounce'
+                  : 'opacity-20 scale-90 bg-gray-100 dark:bg-gray-700'
+              }`}
+            >
+              {idx <= revealedIndex ? emoji : '❓'}
             </div>
           ))
-          : availableTiles.map((emoji, index) => (
-            <button
-              key={index}
-              onClick={() => handleEmojiClick(emoji)}
-              className="text-6xl p-4 bg-white dark:bg-gray-700 rounded-lg shadow hover:scale-110 transition-transform hover:shadow-xl"
-              disabled={userSequence.length >= sequence.length}
+        ) : (
+          roundData.sequence.map((_, idx) => (
+            <div
+              key={idx}
+              className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex items-center justify-center text-3xl font-bold border-2 transition-all ${
+                idx < userSequence.length
+                  ? 'bg-emerald-50 dark:bg-emerald-900/40 border-emerald-500 text-emerald-600'
+                  : idx === userSequence.length
+                  ? 'border-dashed border-blue-500 animate-pulse bg-blue-50/50 dark:bg-blue-900/20'
+                  : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 text-gray-300'
+              }`}
             >
-              {emoji}
-            </button>
-          ))}
+              {idx < userSequence.length ? userSequence[idx] : idx + 1}
+            </div>
+          ))
+        )}
       </div>
-      <div className="text-center">Progress: {userSequence.length}/{sequence.length}</div>
+
+      {/* Interactive Choice Grid */}
+      <div className="grid grid-cols-4 sm:grid-cols-6 gap-3 max-w-lg mx-auto">
+        {roundData.availableTiles.map((emoji, idx) => (
+          <button
+            key={idx}
+            onClick={() => handleTileClick(emoji)}
+            disabled={isShowing || userSequence.length >= roundData.sequence.length}
+            className={`text-4xl md:text-5xl p-3 rounded-2xl bg-white dark:bg-gray-700 shadow hover:shadow-lg transition-all active:scale-95 flex items-center justify-center border border-gray-100 dark:border-gray-600 ${
+              feedbackTile === emoji ? 'ring-4 ring-blue-500 scale-110' : 'hover:scale-105'
+            } ${isShowing ? 'opacity-40 cursor-not-allowed' : ''}`}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+
+      <div className="text-center font-semibold text-gray-500 dark:text-gray-400">
+        Progress: {userSequence.length} of {roundData.sequence.length} steps matched
+      </div>
     </div>
   );
 };
 
 // =============================================================================
-// GAME 2: ROUTINE BUILDER
+// GAME 2: ROUTINE BUILDER (Touch-Accessible Functional Independence)
 // =============================================================================
 
 const RoutineBuilder = ({ engine }) => {
@@ -637,56 +692,69 @@ const RoutineBuilder = ({ engine }) => {
   const [correctOrder, setCorrectOrder] = useState([]);
   const [hints, setHints] = useState([]);
   const [message, setMessage] = useState('');
-  const [showHint, setShowHint] = useState(false);
+  const [revealedHintIdx, setRevealedHintIdx] = useState(null);
 
   useEffect(() => {
     if (engine.showTutorial) return;
     const round = AIGameService.generateRoutine(engine.level);
     setThemeName(round.themeName);
-    setCorrectOrder(round.steps);
+    setCorrectOrder(round.correctOrder);
     setHints(round.hints);
-    setTasks(shuffleArray(round.steps));
+    setTasks(shuffle([...round.steps]));
     setPhase('learn');
     setMessage('');
-    setShowHint(false);
+    setRevealedHintIdx(null);
   }, [engine.sessionId, engine.showTutorial, engine.level]);
 
-  function shuffleArray(arr) {
-    const a = [...arr];
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    if (a.every((x, i) => x === arr[i]) && a.length > 1) {
-      [a[0], a[1]] = [a[1], a[0]];
-    }
-    return a;
-  }
-
   const beginArranging = () => {
-    setTasks(shuffleArray(correctOrder));
+    setTasks(shuffle([...correctOrder]));
     setPhase('arrange');
   };
 
-  const handleDragStart = (e, index) => e.dataTransfer.setData('index', index);
-  const handleDrop = (e, targetIndex) => {
-    e.preventDefault();
-    const sourceIndex = parseInt(e.dataTransfer.getData('index'), 10);
-    const newTasks = [...tasks];
-    const [removed] = newTasks.splice(sourceIndex, 1);
-    newTasks.splice(targetIndex, 0, removed);
-    setTasks(newTasks);
+  // Move item up
+  const moveTaskUp = (index) => {
+    if (index === 0) return;
+    const next = [...tasks];
+    [next[index - 1], next[index]] = [next[index], next[index - 1]];
+    setTasks(next);
+    engine.playSound('coin');
+  };
+
+  // Move item down
+  const moveTaskDown = (index) => {
+    if (index === tasks.length - 1) return;
+    const next = [...tasks];
+    [next[index + 1], next[index]] = [next[index], next[index + 1]];
+    setTasks(next);
+    engine.playSound('coin');
+  };
+
+  const useSmartHint = () => {
+    if (engine.coins < 2) {
+      engine.pushToast('🪙 Need 2 coins for a step hint', 'info');
+      return;
+    }
+    // Find first misplaced task
+    const misplaced = correctOrder.findIndex((t, i) => tasks[i] !== t);
+    if (misplaced !== -1) {
+      setRevealedHintIdx(misplaced);
+      engine.pushToast(`💡 Hint: Step ${misplaced + 1} is "${correctOrder[misplaced]}"`, 'checkpoint');
+    } else {
+      engine.pushToast('✨ All items are already in correct order!', 'info');
+    }
   };
 
   const checkOrder = () => {
     const isCorrect = tasks.every((task, i) => task === correctOrder[i]);
     if (isCorrect) {
-      const points = engine.recordCorrect(20);
-      setMessage(`✅ Perfect order! +${points} points`);
-      engine.levelUp();
+      const points = engine.recordCorrect(25 + engine.level * 3);
+      setMessage(`✅ Perfect routine! +${points} points awarded!`);
+      setTimeout(() => {
+        engine.levelUp();
+      }, 1500);
     } else {
       const correctCount = tasks.filter((task, i) => task === correctOrder[i]).length;
-      setMessage(`❌ Only ${correctCount}/${correctOrder.length} in the right place. Let's try a new one.`);
+      setMessage(`❌ ${correctCount} of ${correctOrder.length} steps in position. Check carefully!`);
       engine.recordWrong();
     }
   };
@@ -714,23 +782,25 @@ const RoutineBuilder = ({ engine }) => {
     return (
       <div className="space-y-6">
         <GameHeader engine={engine} />
-        <div className="bg-purple-50 dark:bg-purple-900/20 p-6 rounded-lg">
-          <h3 className="text-2xl font-bold text-center mb-1">📖 Learn: {themeName}</h3>
-          <p className="text-center text-gray-500 dark:text-gray-400 mb-4">Here is the correct order — and why each step comes when it does.</p>
-          <div className="space-y-2 max-w-lg mx-auto">
+        <div className="bg-purple-50 dark:bg-purple-900/20 p-6 rounded-2xl shadow-sm">
+          <h3 className="text-2xl font-bold text-center mb-1 text-purple-700 dark:text-purple-300">📖 Learn: {themeName}</h3>
+          <p className="text-center text-gray-600 dark:text-gray-300 mb-6">Review the logical order first. When you are ready, tap below to arrange them from memory!</p>
+          <div className="space-y-3 max-w-lg mx-auto">
             {correctOrder.map((task, index) => (
-              <div key={index} className="p-3 bg-white dark:bg-gray-700 rounded-lg shadow">
+              <div key={index} className="p-4 bg-white dark:bg-gray-700 rounded-xl shadow-sm border border-purple-100 dark:border-purple-800">
                 <div className="flex items-center">
-                  <span className="w-8 text-center font-bold text-purple-500">{index + 1}</span>
-                  <span className="text-lg">{task}</span>
+                  <span className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 flex items-center justify-center font-bold mr-3">
+                    {index + 1}
+                  </span>
+                  <span className="text-lg font-medium">{task}</span>
                 </div>
-                <p className="text-sm text-gray-500 dark:text-gray-400 ml-8 mt-1">{hints[index]}</p>
+                {hints[index] && <p className="text-xs text-gray-500 dark:text-gray-400 ml-11 mt-1">{hints[index]}</p>}
               </div>
             ))}
           </div>
           <button
             onClick={beginArranging}
-            className="mt-6 w-full py-3 bg-primary-600 text-white rounded-lg text-lg font-bold hover:bg-primary-700 transition-colors"
+            className="mt-6 w-full max-w-lg mx-auto block py-3.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl text-lg font-bold shadow-md transition-all active:scale-98"
           >
             🔀 I've Got It — Shuffle & Start!
           </button>
@@ -743,45 +813,68 @@ const RoutineBuilder = ({ engine }) => {
     <div className="space-y-6">
       <GameHeader engine={engine} />
       {message && (
-        <div className={`text-center text-xl font-bold ${message.includes('✅') ? 'text-green-500' : 'text-red-500'}`}>
+        <div className={`text-center text-xl font-bold p-3 rounded-xl ${message.includes('✅') ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
           {message}
         </div>
       )}
-      <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg">
-        <p className="text-center text-lg">🎯 Drag to arrange "{themeName}" in the correct order, then check your answer</p>
+
+      <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl text-center">
+        <p className="text-lg font-bold text-purple-800 dark:text-purple-200">🎯 Reorder "{themeName}" into correct sequence</p>
+        <p className="text-xs text-gray-500 mt-1">Use the ▲ and ▼ buttons or drag cards to put steps in order</p>
       </div>
-      <div className="space-y-2 max-w-md mx-auto">
-        {tasks.map((task, index) => (
-          <div
-            key={task}
-            draggable
-            onDragStart={(e) => handleDragStart(e, index)}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => handleDrop(e, index)}
-            className="p-4 bg-white dark:bg-gray-700 rounded-lg shadow cursor-move hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors text-lg"
-          >
-            <span className="inline-block w-8 text-center font-bold text-gray-400">{index + 1}</span>
-            {task}
-          </div>
-        ))}
+
+      <div className="space-y-2.5 max-w-lg mx-auto">
+        {tasks.map((task, index) => {
+          const isRight = task === correctOrder[index];
+          const isHinted = revealedHintIdx === index;
+          return (
+            <div
+              key={task}
+              className={`flex items-center justify-between p-3.5 bg-white dark:bg-gray-700 rounded-2xl shadow-sm border transition-all ${
+                isHinted ? 'border-amber-400 ring-2 ring-amber-300' : isRight ? 'border-emerald-200' : 'border-gray-100 dark:border-gray-600'
+              }`}
+            >
+              <div className="flex items-center flex-1 mr-2">
+                <span className="w-8 h-8 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 flex items-center justify-center font-bold mr-3 text-sm">
+                  {index + 1}
+                </span>
+                <span className="text-base font-medium">{task}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => moveTaskUp(index)}
+                  disabled={index === 0}
+                  className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-600 hover:bg-purple-100 dark:hover:bg-purple-900/40 text-gray-700 dark:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
+                  title="Move Up"
+                >
+                  ▲
+                </button>
+                <button
+                  onClick={() => moveTaskDown(index)}
+                  disabled={index === tasks.length - 1}
+                  className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-600 hover:bg-purple-100 dark:hover:bg-purple-900/40 text-gray-700 dark:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
+                  title="Move Down"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      {showHint && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-lg text-center text-yellow-700 dark:text-yellow-300 max-w-md mx-auto">
-          💡 {hints[correctOrder.findIndex((t, i) => tasks[i] !== t) === -1 ? 0 : correctOrder.findIndex((t, i) => tasks[i] !== t)]}
-        </div>
-      )}
-      <div className="flex gap-3 justify-center flex-wrap">
+
+      <div className="flex gap-3 justify-center max-w-lg mx-auto flex-wrap">
         <button
           onClick={checkOrder}
-          className="px-8 py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 transition-colors"
+          className="flex-1 py-3.5 px-6 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md transition-all active:scale-98"
         >
           ✅ Check My Order
         </button>
         <button
-          onClick={() => setShowHint(true)}
-          className="px-6 py-3 bg-yellow-500 text-white rounded-lg font-bold hover:bg-yellow-600 transition-colors flex items-center"
+          onClick={useSmartHint}
+          className="py-3.5 px-5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-md transition-all flex items-center gap-1.5 active:scale-98"
         >
-          <HelpCircle className="w-5 h-5 mr-2" /> Need a Hint
+          💡 Step Hint (2🪙)
         </button>
       </div>
     </div>
@@ -789,37 +882,43 @@ const RoutineBuilder = ({ engine }) => {
 };
 
 // =============================================================================
-// GAME 3: PATTERN QUEST
+// GAME 3: PATTERN QUEST (Algorithmic Logic with Hint Engine)
 // =============================================================================
 
 const PatternQuest = ({ engine }) => {
   const { t } = useTranslation();
-  const [pattern, setPattern] = useState([]);
-  const [options, setOptions] = useState([]);
-  const [correctAnswer, setCorrectAnswer] = useState('');
+  const [round, setRound] = useState(null);
   const [selected, setSelected] = useState(null);
   const [message, setMessage] = useState('');
+  const [hintShown, setHintShown] = useState(false);
 
   useEffect(() => {
     if (engine.showTutorial) return;
     const result = AIGameService.generatePattern(engine.level);
-    setPattern(result.pattern);
-    setOptions(result.options);
-    setCorrectAnswer(result.correctAnswer);
+    setRound(result);
     setSelected(null);
     setMessage('');
+    setHintShown(false);
   }, [engine.sessionId, engine.showTutorial, engine.level]);
 
   const handleOptionClick = (option) => {
-    if (selected) return;
+    if (selected !== null || !round) return;
     setSelected(option);
-    if (option === correctAnswer) {
-      const points = engine.recordCorrect(15);
-      setMessage(`✅ Correct! +${points} points!`);
-      setTimeout(() => engine.levelUp(), 700);
+
+    if (option === round.correctAnswer) {
+      engine.playSound('correct');
+      const pts = engine.recordCorrect(15 + engine.level * 2);
+      setMessage(`✅ Brilliant match! +${pts} points`);
+      setTimeout(() => {
+        engine.levelUp();
+      }, 1300);
     } else {
-      setMessage('❌ Not quite — here comes a new pattern!');
+      engine.playSound('wrong');
       engine.recordWrong();
+      setMessage('❌ Not quite! Notice the repeating sequence.');
+      setTimeout(() => {
+        setSelected(null);
+      }, 1200);
     }
   };
 
@@ -842,66 +941,127 @@ const PatternQuest = ({ engine }) => {
     );
   }
 
+  if (!round) return <div className="text-center p-8">Loading Pattern Quest...</div>;
+
   return (
     <div className="space-y-6">
       <GameHeader engine={engine} />
       {message && (
-        <div className={`text-center text-2xl font-bold ${message.includes('✅') ? 'text-green-500' : 'text-red-500'}`}>
+        <div className={`text-center text-xl font-bold p-3 rounded-xl ${message.includes('✅') ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
           {message}
         </div>
       )}
-      <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
-        <p className="text-center text-lg">🧩 What comes next in the pattern?</p>
+
+      <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl text-center">
+        <p className="text-xl font-bold text-emerald-800 dark:text-emerald-200">🧩 What element completes the sequence?</p>
+        <p className="text-xs text-gray-500 mt-1">Study the rhythm and tap the missing piece below</p>
       </div>
-      <div className="flex justify-center gap-4 text-6xl p-8 bg-white dark:bg-gray-700 rounded-lg shadow max-w-lg mx-auto flex-wrap">
-        {pattern.map((item, index) => (
-          <div key={index} className={item === '?' ? 'opacity-50 animate-pulse' : ''}>{item}</div>
+
+      {/* Pattern Display */}
+      <div className="flex justify-center items-center gap-3 p-8 bg-white dark:bg-gray-800 rounded-2xl shadow-md max-w-xl mx-auto flex-wrap min-h-[120px]">
+        {round.pattern.map((item, index) => (
+          <div
+            key={index}
+            className={`text-5xl md:text-6xl p-3 rounded-2xl transition-transform ${
+              item === '?'
+                ? 'bg-amber-100 dark:bg-amber-900/40 border-2 border-dashed border-amber-500 text-amber-600 animate-pulse scale-110'
+                : 'bg-gray-50 dark:bg-gray-700/60 shadow-sm'
+            }`}
+          >
+            {item}
+          </div>
         ))}
       </div>
-      <div className="grid grid-cols-4 gap-4 max-w-md mx-auto">
-        {options.map((option, index) => (
+
+      {/* Option Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-md mx-auto">
+        {round.options.map((option, index) => (
           <button
             key={index}
             onClick={() => handleOptionClick(option)}
             disabled={selected !== null}
-            className={`text-5xl p-4 bg-white dark:bg-gray-700 rounded-lg shadow hover:scale-110 transition-transform ${selected === option ? 'ring-4 ring-blue-500' : ''}`}
+            className={`text-5xl p-5 bg-white dark:bg-gray-700 rounded-2xl shadow hover:shadow-xl transition-all hover:scale-105 active:scale-95 border border-gray-100 dark:border-gray-600 flex items-center justify-center ${
+              selected === option ? 'ring-4 ring-emerald-500 scale-105' : ''
+            }`}
           >
             {option}
           </button>
         ))}
+      </div>
+
+      <div className="text-center">
+        {!hintShown ? (
+          <button
+            onClick={() => setHintShown(true)}
+            className="text-xs text-amber-600 dark:text-amber-400 hover:underline flex items-center justify-center gap-1 mx-auto"
+          >
+            💡 Need a clue? Look for groups that repeat
+          </button>
+        ) : (
+          <div className="p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 text-sm rounded-xl max-w-sm mx-auto">
+            Observe the very first elements: does the sequence start over or count up?
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
 // =============================================================================
-// GAME 4: STORY WEAVER
+// GAME 4: STORY WEAVER (Infinite Dynamic Real-Time Stories + Scaling Questions)
 // =============================================================================
 
 const StoryWeaver = ({ engine }) => {
   const { t } = useTranslation();
   const [storyData, setStoryData] = useState(null);
-  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [showStory, setShowStory] = useState(true);
+  const [peekStory, setPeekStory] = useState(false);
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [answerFeedback, setAnswerFeedback] = useState(null);
 
   useEffect(() => {
     if (engine.showTutorial) return;
-    setStoryData(AIGameService.generateStory(engine.level));
-    setCurrentQuestion(0);
+    const generated = AIGameService.generateStory(engine.level);
+    setStoryData(generated);
+    setCurrentQuestionIdx(0);
     setShowStory(true);
+    setPeekStory(false);
+    setSelectedOption(null);
+    setAnswerFeedback(null);
   }, [engine.sessionId, engine.showTutorial, engine.level]);
 
   const handleAnswer = (option) => {
-    const question = storyData.questions[currentQuestion];
-    if (option === question.correctAnswer) {
-      engine.recordCorrect(10);
-      if (currentQuestion < storyData.questions.length - 1) {
-        setCurrentQuestion((q) => q + 1);
-      } else {
-        engine.levelUp();
-      }
+    if (selectedOption !== null || !storyData) return;
+    setSelectedOption(option);
+    const q = storyData.questions[currentQuestionIdx];
+
+    if (option === q.correctAnswer) {
+      engine.playSound('correct');
+      setAnswerFeedback('correct');
+      const pts = engine.recordCorrect(15);
+
+      setTimeout(() => {
+        setSelectedOption(null);
+        setAnswerFeedback(null);
+
+        if (currentQuestionIdx < storyData.questions.length - 1) {
+          setCurrentQuestionIdx(idx => idx + 1);
+        } else {
+          // All questions for this stage answered!
+          engine.pushToast(`🎉 Story Stage ${engine.level} Cleared! +${pts} pts`, 'checkpoint');
+          engine.levelUp();
+        }
+      }, 1000);
     } else {
+      engine.playSound('wrong');
+      setAnswerFeedback('wrong');
       engine.recordWrong();
+
+      setTimeout(() => {
+        setSelectedOption(null);
+        setAnswerFeedback(null);
+      }, 1200);
     }
   };
 
@@ -924,41 +1084,102 @@ const StoryWeaver = ({ engine }) => {
     );
   }
 
-  if (!storyData) return <div className="text-center p-8">Loading...</div>;
+  if (!storyData) return <div className="text-center p-8">Generating live story...</div>;
 
-  const question = storyData.questions[currentQuestion];
+  const currentQ = storyData.questions[currentQuestionIdx];
 
   return (
     <div className="space-y-6">
       <GameHeader engine={engine} />
-      <div className="bg-orange-50 dark:bg-orange-900/20 p-6 rounded-lg">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-2xl font-bold">📖 {storyData.title}</h3>
-          <span className="text-sm text-gray-500">Question {currentQuestion + 1} of {storyData.questions.length}</span>
+
+      <div className="bg-orange-50 dark:bg-orange-900/20 p-6 rounded-2xl shadow-sm border border-orange-100 dark:border-orange-800">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+          <div>
+            <h3 className="text-2xl font-bold text-orange-900 dark:text-orange-200">📖 {storyData.title}</h3>
+            <p className="text-xs text-gray-500">
+              Stage {engine.level} • {storyData.questions.length} Questions to Complete • ~{storyData.wordCount} words
+            </p>
+          </div>
+          {!showStory && (
+            <button
+              onClick={() => setPeekStory(!peekStory)}
+              className="px-3.5 py-1.5 rounded-xl bg-orange-200 dark:bg-orange-800 text-orange-900 dark:text-orange-100 text-xs font-semibold hover:bg-orange-300 transition-colors flex items-center gap-1"
+            >
+              👁️ {peekStory ? 'Hide Story' : 'Peek at Story'}
+            </button>
+          )}
         </div>
+
+        {/* Story Reading Phase */}
         {showStory ? (
-          <>
-            <p className="text-lg leading-relaxed">{storyData.story}</p>
+          <div className="space-y-4">
+            <div className="p-5 bg-white dark:bg-gray-800 rounded-xl leading-relaxed text-lg text-gray-800 dark:text-gray-200 shadow-sm border border-orange-100 dark:border-gray-700">
+              {storyData.story}
+            </div>
             <button
               onClick={() => setShowStory(false)}
-              className="mt-4 px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+              className="w-full py-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-lg font-bold shadow-md transition-all active:scale-98"
             >
-              Start Questions
+              ✍️ Ready! Start {storyData.questions.length} Recall Questions
             </button>
-          </>
+          </div>
         ) : (
-          <div className="space-y-4">
-            <p className="text-lg font-semibold">{question.q}</p>
-            <div className="space-y-2">
-              {question.options.map((option, index) => (
-                <button
-                  key={index}
-                  onClick={() => handleAnswer(option)}
-                  className="w-full p-4 bg-white dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 text-left transition-colors text-lg"
-                >
-                  {String.fromCharCode(65 + index)}. {option}
-                </button>
-              ))}
+          /* Question Answering Phase */
+          <div className="space-y-5">
+            {peekStory && (
+              <div className="p-4 bg-white/80 dark:bg-gray-800/80 rounded-xl text-sm leading-relaxed border border-orange-200 dark:border-orange-700 mb-3 text-gray-700 dark:text-gray-300">
+                <span className="font-bold block mb-1 text-orange-700">Story Reference:</span>
+                {storyData.story}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between text-xs text-gray-500 font-semibold">
+              <span>Question {currentQuestionIdx + 1} of {storyData.questions.length}</span>
+              <div className="flex gap-1">
+                {storyData.questions.map((_, i) => (
+                  <div
+                    key={i}
+                    className={`w-4 h-1.5 rounded-full ${
+                      i < currentQuestionIdx ? 'bg-emerald-500' : i === currentQuestionIdx ? 'bg-orange-500' : 'bg-gray-300 dark:bg-gray-700'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="p-5 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-orange-100 dark:border-gray-700">
+              <p className="text-xl font-bold text-gray-900 dark:text-white mb-4">{currentQ.q}</p>
+              <div className="grid grid-cols-1 gap-3">
+                {currentQ.options.map((option, index) => {
+                  const isSelected = selectedOption === option;
+                  const isFeedbackCorrect = answerFeedback === 'correct' && isSelected;
+                  const isFeedbackWrong = answerFeedback === 'wrong' && isSelected;
+
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => handleAnswer(option)}
+                      disabled={selectedOption !== null}
+                      className={`w-full p-4 rounded-xl text-left text-base font-medium transition-all flex items-center justify-between border ${
+                        isFeedbackCorrect
+                          ? 'bg-emerald-100 border-emerald-500 text-emerald-900'
+                          : isFeedbackWrong
+                          ? 'bg-rose-100 border-rose-500 text-rose-900'
+                          : 'bg-gray-50 dark:bg-gray-700/60 hover:bg-orange-50 dark:hover:bg-gray-600 border-gray-200 dark:border-gray-600'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="w-7 h-7 rounded-lg bg-orange-100 dark:bg-orange-900/50 text-orange-800 dark:text-orange-200 flex items-center justify-center font-bold text-xs">
+                          {String.fromCharCode(65 + index)}
+                        </span>
+                        <span>{option}</span>
+                      </div>
+                      {isFeedbackCorrect && <span>✅</span>}
+                      {isFeedbackWrong && <span>❌</span>}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -968,123 +1189,90 @@ const StoryWeaver = ({ engine }) => {
 };
 
 // =============================================================================
-// GAME 5: FACE & PLACE - Infinite AI-Generated Stages (FIXED)
+// GAME 5: FACE & PLACE (Fully Decoupled 2D Randomized Matching Engine)
 // =============================================================================
 
 const FacePlace = ({ engine }) => {
   const { t } = useTranslation();
-  const [pairs, setPairs] = useState([]);
+  const [faces, setFaces] = useState([]);
+  const [places, setPlaces] = useState([]);
+  const [masterPairs, setMasterPairs] = useState([]);
   const [selectedFace, setSelectedFace] = useState(null);
   const [selectedPlace, setSelectedPlace] = useState(null);
-  const [matchedPairs, setMatchedPairs] = useState([]); // Store matched pairs
+  const [matchedPairs, setMatchedPairs] = useState([]);
   const [message, setMessage] = useState('');
-  const [levelDisplay, setLevelDisplay] = useState(1);
-  const [localGameOver, setLocalGameOver] = useState(false);
-  const [wrongAttempts, setWrongAttempts] = useState(0);
-  const [hint, setHint] = useState('');
-  const [showHint, setShowHint] = useState(false);
+  const [hintMsg, setHintMsg] = useState('');
 
-  // Generate new pairs whenever level changes
   useEffect(() => {
     if (engine.showTutorial) return;
-    generateNewPairs();
-  }, [engine.sessionId, engine.showTutorial]);
-
-  const generateNewPairs = () => {
-    const newPairs = AIGameService.generateFacePlacePairs(engine.level);
-    setPairs(newPairs);
+    const round = AIGameService.generateFacePlacePairs(engine.level);
+    setMasterPairs(round.pairs);
+    setFaces(round.shuffledFaces);
+    setPlaces(round.shuffledPlaces);
     setMatchedPairs([]);
     setSelectedFace(null);
     setSelectedPlace(null);
     setMessage('');
-    setHint('');
-    setWrongAttempts(0);
-    setShowHint(false);
-    setLevelDisplay(engine.level);
-  };
+    setHintMsg('');
+  }, [engine.sessionId, engine.showTutorial, engine.level]);
 
-  const handleFaceClick = (face) => {
-    // Don't allow clicking already matched faces
-    if (matchedPairs.some(p => p.face === face)) return;
-    setSelectedFace(selectedFace === face ? null : face);
-    setMessage('');
-    setHint('');
-  };
-
-  const handlePlaceClick = (place) => {
-    // Don't allow clicking already matched places
-    if (matchedPairs.some(p => p.place === place)) return;
-    setSelectedPlace(selectedPlace === place ? null : place);
-    setMessage('');
-    setHint('');
-  };
-
-  // Auto-check when both are selected
+  // Handle Match Evaluation
   useEffect(() => {
     if (!selectedFace || !selectedPlace) return;
 
     const timer = setTimeout(() => {
-      // Find the pair where face matches selectedFace AND place matches selectedPlace
-      const matchedPair = pairs.find(p => p.face === selectedFace && p.place === selectedPlace);
+      // Find if selectedFace & selectedPlace belong together in masterPairs
+      const match = masterPairs.find(p => p.face === selectedFace && p.place === selectedPlace);
 
-      if (matchedPair) {
-        // ✅ CORRECT MATCH!
-        setWrongAttempts(0);
-        const points = engine.recordCorrect(10 + Math.floor(engine.level / 2));
-        setMessage(`✅ ${matchedPair.name} belongs at the ${matchedPair.location}! +${points} points!`);
+      if (match) {
+        engine.playSound('correct');
+        const points = engine.recordCorrect(15 + Math.floor(engine.level / 2));
+        setMessage(`✅ Perfect! ${match.name} works at the ${match.location}! (+${points} pts)`);
 
         setMatchedPairs(prev => {
-          const next = [...prev, matchedPair];
-          // Check if all pairs are matched
-          if (next.length === pairs.length) {
-            // Level complete!
+          const updated = [...prev, match];
+          if (updated.length === masterPairs.length) {
             setTimeout(() => {
+              engine.pushToast(`🎉 Face & Place Stage ${engine.level} Cleared!`, 'checkpoint');
               engine.levelUp();
-              generateNewPairs();
-            }, 1500);
+            }, 1400);
           }
-          return next;
+          return updated;
         });
 
         setSelectedFace(null);
         setSelectedPlace(null);
-        setTimeout(() => setMessage(''), 2000);
+        setTimeout(() => setMessage(''), 2200);
       } else {
-        // ❌ WRONG MATCH!
-        setWrongAttempts(prev => prev + 1);
-        setMessage('❌ Not a match! Try again.');
-
-        // Provide hint after 1 wrong attempt
-        if (wrongAttempts >= 1) {
-          // Find which place belongs to the selected face
-          const correctPair = pairs.find(p => p.face === selectedFace);
-          if (correctPair && !matchedPairs.includes(correctPair)) {
-            setHint(`💡 Hint: ${selectedFace} belongs with "${correctPair.place}" (${correctPair.location})`);
-            setShowHint(true);
-          }
-        }
-
-        // Lose a life
+        engine.playSound('wrong');
         engine.recordWrong();
-
+        setMessage('❌ Not a match! Try another combination.');
         setSelectedFace(null);
         setSelectedPlace(null);
-        setTimeout(() => {
-          setMessage('');
-          setHint('');
-          setShowHint(false);
-        }, 2000);
+        setTimeout(() => setMessage(''), 1800);
       }
-    }, 400);
+    }, 350);
 
     return () => clearTimeout(timer);
-  }, [selectedFace, selectedPlace, pairs, matchedPairs, wrongAttempts]);
+  }, [selectedFace, selectedPlace, masterPairs]);
 
-  if (localGameOver || engine.gameOver) {
-    return <GameOverScreen engine={engine} />;
-  }
+  const useClueHint = () => {
+    if (engine.coins < 3) {
+      engine.pushToast('🪙 Need 3 coins for a role clue', 'info');
+      return;
+    }
+    // Find first unmatched pair
+    const remaining = masterPairs.filter(p => !matchedPairs.some(m => m.face === p.face));
+    if (remaining.length > 0) {
+      const clue = remaining[0];
+      setHintMsg(`💡 Clue: ${clue.face} (${clue.name}) belongs with ${clue.place} (${clue.location})`);
+      engine.pushToast('💡 Role clue unlocked!', 'coin');
+    }
+  };
 
- if (engine.showTutorial) {
+  if (engine.gameOver) return <GameOverScreen engine={engine} />;
+
+  if (engine.showTutorial) {
     return (
       <TutorialScreen
         gameName={t('games.facePlace')}
@@ -1102,462 +1290,334 @@ const FacePlace = ({ engine }) => {
     );
   }
 
-  // Get available faces and places (not yet matched)
-  const availableFaces = pairs.filter(p => !matchedPairs.includes(p));
-  const availablePlaces = pairs.filter(p => !matchedPairs.includes(p));
+  const remainingFaces = faces.filter(f => !matchedPairs.some(m => m.face === f.face));
+  const remainingPlaces = places.filter(p => !matchedPairs.some(m => m.place === p.place));
 
   return (
     <div className="space-y-6">
       <GameHeader engine={engine} />
 
-      {/* Level Display */}
-      <div className="text-center text-sm text-gray-500 dark:text-gray-400">
-        <span className="font-semibold text-primary-600">Level {levelDisplay}</span>
-        {' • '}
-        <span>Matched: {matchedPairs.length}/{pairs.length}</span>
-        {' • '}
-        <span>Remaining: {availableFaces.length}</span>
-        {engine.combo >= 3 && <span className="ml-2 text-yellow-500">🔥 {engine.combo}x Combo!</span>}
+      <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-xl text-center">
+        <p className="text-xl font-bold text-indigo-800 dark:text-indigo-200">👤 Tap a Person, then tap their matching Place</p>
+        <p className="text-xs text-gray-500 mt-1">
+          Stage {engine.level} • Matched {matchedPairs.length} of {masterPairs.length} pairs • Positions are independently shuffled
+        </p>
       </div>
 
       {message && (
-        <div className={`text-center text-xl font-bold ${
-          message.includes('✅') ? 'text-green-500' : 'text-red-500'
-        }`}>
+        <div className={`text-center text-lg font-bold p-3 rounded-xl ${message.includes('✅') ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
           {message}
         </div>
       )}
 
-      {showHint && hint && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 p-3 rounded-lg text-center text-yellow-700 dark:text-yellow-300 text-sm">
-          {hint}
+      {hintMsg && (
+        <div className="p-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-300 text-amber-900 dark:text-amber-200 text-center rounded-xl text-sm max-w-md mx-auto">
+          {hintMsg}
         </div>
       )}
 
-      <div className="bg-indigo-50 dark:bg-indigo-900/20 p-3 rounded-lg">
-        <p className="text-center text-lg">👤 Tap a face, then tap the place where they work</p>
-        <p className="text-center text-sm text-gray-500 dark:text-gray-400">
-          {availableFaces.length} pairs remaining
-        </p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-6 max-w-2xl mx-auto">
-        {/* Faces Column */}
+      {/* 2-Column Fully Decoupled Layout */}
+      <div className="grid grid-cols-2 gap-4 sm:gap-8 max-w-2xl mx-auto">
+        {/* Left Column: People */}
         <div>
-          <h3 className="text-center font-bold mb-3 text-gray-700 dark:text-gray-300">👤 People</h3>
-          <div className="grid grid-cols-2 gap-3">
-            {availableFaces.map((pair, index) => (
+          <h4 className="text-center font-bold mb-3 text-indigo-700 dark:text-indigo-300 flex items-center justify-center gap-1">
+            <span>👤</span> People ({remainingFaces.length})
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {remainingFaces.map((f, i) => (
               <button
-                key={`face-${index}`}
-                onClick={() => handleFaceClick(pair.face)}
-                className={`flex flex-col items-center p-3 bg-white dark:bg-gray-700 rounded-xl shadow hover:scale-105 transition-all ${
-                  selectedFace === pair.face ? 'ring-4 ring-blue-500 scale-105 shadow-lg' : ''
+                key={i}
+                onClick={() => setSelectedFace(selectedFace === f.face ? null : f.face)}
+                className={`flex flex-col items-center p-3 rounded-2xl bg-white dark:bg-gray-800 shadow hover:shadow-lg transition-all border ${
+                  selectedFace === f.face
+                    ? 'ring-4 ring-indigo-500 scale-105 border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/40'
+                    : 'border-gray-100 dark:border-gray-700 hover:scale-102'
                 }`}
               >
-                <span className="text-5xl">{pair.face}</span>
-                <span className="text-xs mt-1 text-gray-500 dark:text-gray-400">{pair.name}</span>
-                <span className="text-[10px] text-gray-400 dark:text-gray-500">{pair.faceDescription}</span>
+                <span className="text-5xl my-1">{f.face}</span>
+                <span className="text-xs font-bold text-gray-900 dark:text-white mt-1">{f.name}</span>
+                <span className="text-[10px] text-gray-400 text-center line-clamp-1">{f.hint}</span>
               </button>
             ))}
           </div>
         </div>
 
-        {/* Places Column */}
+        {/* Right Column: Places */}
         <div>
-          <h3 className="text-center font-bold mb-3 text-gray-700 dark:text-gray-300">📍 Places</h3>
-          <div className="grid grid-cols-2 gap-3">
-            {availablePlaces.map((pair, index) => (
+          <h4 className="text-center font-bold mb-3 text-purple-700 dark:text-purple-300 flex items-center justify-center gap-1">
+            <span>📍</span> Places ({remainingPlaces.length})
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {remainingPlaces.map((p, i) => (
               <button
-                key={`place-${index}`}
-                onClick={() => handlePlaceClick(pair.place)}
-                className={`flex flex-col items-center p-3 bg-white dark:bg-gray-700 rounded-xl shadow hover:scale-105 transition-all ${
-                  selectedPlace === pair.place ? 'ring-4 ring-blue-500 scale-105 shadow-lg' : ''
+                key={i}
+                onClick={() => setSelectedPlace(selectedPlace === p.place ? null : p.place)}
+                className={`flex flex-col items-center p-3 rounded-2xl bg-white dark:bg-gray-800 shadow hover:shadow-lg transition-all border ${
+                  selectedPlace === p.place
+                    ? 'ring-4 ring-purple-500 scale-105 border-purple-500 bg-purple-50/50 dark:bg-purple-900/40'
+                    : 'border-gray-100 dark:border-gray-700 hover:scale-102'
                 }`}
               >
-                <span className="text-5xl">{pair.place}</span>
-                <span className="text-xs mt-1 text-gray-500 dark:text-gray-400">{pair.location}</span>
-                <span className="text-[10px] text-gray-400 dark:text-gray-500">{pair.placeDescription}</span>
+                <span className="text-5xl my-1">{p.place}</span>
+                <span className="text-xs font-bold text-gray-900 dark:text-white mt-1">{p.location}</span>
+                <span className="text-[10px] text-gray-400 text-center line-clamp-1">{p.hint}</span>
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Progress Bar */}
-      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 max-w-md mx-auto">
-        <div
-          className="bg-gradient-to-r from-indigo-500 to-primary-500 h-2 rounded-full transition-all duration-500"
-          style={{ width: `${pairs.length > 0 ? (matchedPairs.length / pairs.length) * 100 : 0}%` }}
-        />
-      </div>
-
-      {/* Stats */}
-      <div className="text-center text-xs text-gray-400 dark:text-gray-500">
-        {wrongAttempts > 0 && <span>⚠️ Wrong attempts: {wrongAttempts} </span>}
-        {showHint && <span className="ml-2">💡 Use hints to find the right match!</span>}
+      <div className="flex justify-center gap-3">
+        <button
+          onClick={useClueHint}
+          className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5"
+        >
+          💡 Clue Hint (3🪙)
+        </button>
       </div>
     </div>
   );
 };
 
 // =============================================================================
-// GAME 6: CARD FLIP - Infinite Stages with Time Limit
+// GAME 6: CARD FLIP (Interactive 3D Grid with "Quick Peek" Coin Utility)
 // =============================================================================
 
 const CardFlip = ({ engine }) => {
   const { t } = useTranslation();
   const [cards, setCards] = useState([]);
-  const [flipped, setFlipped] = useState([]); // indices of currently flipped cards
-  const [matched, setMatched] = useState([]); // pairIds that have been matched
+  const [flipped, setFlipped] = useState([]);
+  const [matched, setMatched] = useState([]);
   const [timeLeft, setTimeLeft] = useState(0);
-  const [timeLimit, setTimeLimit] = useState(0);
-  const [wrongAttempts, setWrongAttempts] = useState(0);
+  const [peekActive, setPeekActive] = useState(false);
   const [message, setMessage] = useState('');
-  const [isComplete, setIsComplete] = useState(false);
-  const [isLocked, setIsLocked] = useState(false); // prevent clicking while checking
-  const [levelDisplay, setLevelDisplay] = useState(1);
   const timerRef = useRef(null);
   const totalPairsRef = useRef(0);
 
-  // Initialize new stage
   useEffect(() => {
     if (engine.showTutorial) return;
-    startNewStage();
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [engine.sessionId, engine.showTutorial]);
-
-  const startNewStage = () => {
     const stage = AIGameService.generateCardFlipGrid(engine.level);
     setCards(stage.cards);
     setFlipped([]);
     setMatched([]);
-    setWrongAttempts(0);
     setMessage('');
-    setIsComplete(false);
-    setIsLocked(false);
-    setTimeLimit(stage.timeLimit);
+    setPeekActive(false);
     setTimeLeft(stage.timeLimit);
-    setLevelDisplay(engine.level);
     totalPairsRef.current = stage.pairs;
 
-    // Clear any existing timer
     if (timerRef.current) clearInterval(timerRef.current);
-
-    // Start countdown
     timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
+      setTimeLeft(prev => {
         if (prev <= 1) {
           clearInterval(timerRef.current);
-          // Time's up!
-          setMessage('⏰ Time\'s up!');
-          handleTimeUp();
+          engine.recordWrong();
+          engine.pushToast('⏰ Time expired for this round!', 'wrong');
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
-  };
 
-  // Handle time up = lose a life, restart stage
-  const handleTimeUp = () => {
-    engine.recordWrong();
-    setMessage('⏰ Time\'s up! A life was lost.');
-    // Give a moment to see the message, then restart stage
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [engine.sessionId, engine.showTutorial, engine.level]);
+
+  // Quick Peek Powerup (Real Coin Utility)
+  const useQuickPeek = () => {
+    if (engine.coins < 5) {
+      engine.pushToast('🪙 Need 5 coins for Quick Peek', 'info');
+      return;
+    }
+    if (peekActive) return;
+    setPeekActive(true);
+    engine.pushToast('👁️ Quick Peek activated! (2s)', 'coin');
     setTimeout(() => {
-      if (!engine.gameOver) {
-        startNewStage();
-      }
-    }, 1500);
+      setPeekActive(false);
+    }, 2000);
   };
 
-  // Card click handler
   const handleCardClick = (index) => {
-    // Prevent clicking if locked, already flipped, or matched
-    if (isLocked) return;
-    if (flipped.includes(index)) return;
-    if (matched.includes(cards[index].pairId)) return;
-    if (isComplete) return;
+    if (peekActive || flipped.length >= 2 || flipped.includes(index) || matched.includes(cards[index].pairId)) return;
 
+    engine.playSound('coin');
     const newFlipped = [...flipped, index];
     setFlipped(newFlipped);
 
-    // If two cards are flipped, check match
     if (newFlipped.length === 2) {
-      setIsLocked(true);
-      const [first, second] = newFlipped;
-      const card1 = cards[first];
-      const card2 = cards[second];
+      const [idx1, idx2] = newFlipped;
+      const c1 = cards[idx1];
+      const c2 = cards[idx2];
 
-      if (card1.pairId === card2.pairId) {
-        // ✅ MATCH!
-        setTimeout(() => {
-          const newMatched = [...matched, card1.pairId];
-          setMatched(newMatched);
-          setFlipped([]);
-          setIsLocked(false);
+      if (c1.pairId === c2.pairId) {
+        // Matched!
+        engine.playSound('correct');
+        const nextMatched = [...matched, c1.pairId];
+        setMatched(nextMatched);
+        setFlipped([]);
+        setTimeLeft(t => t + 10);
+        engine.recordCorrect(15);
+        setMessage('✅ Match! +10s added');
 
-          // Reward: +10 seconds
-          setTimeLeft((prev) => prev + 10);
-          setMessage('✅ Match! +10 seconds');
-          engine.recordCorrect(15);
-
-          // Check if all pairs are matched
-          if (newMatched.length === totalPairsRef.current) {
-            // Stage complete!
-            clearInterval(timerRef.current);
-            setMessage('🎉 Stage Complete!');
-            setIsComplete(true);
-            setTimeout(() => {
-              engine.levelUp();
-              // startNewStage will be called by sessionId change in useEffect
-            }, 1500);
-          } else {
-            setTimeout(() => setMessage(''), 1200);
-          }
-        }, 400);
+        if (nextMatched.length === totalPairsRef.current) {
+          clearInterval(timerRef.current);
+          engine.pushToast(`🎉 Card Flip Stage ${engine.level} Cleared!`, 'checkpoint');
+          setTimeout(() => {
+            engine.levelUp();
+          }, 1400);
+        } else {
+          setTimeout(() => setMessage(''), 1200);
+        }
       } else {
-        // ❌ NO MATCH
-        setWrongAttempts((prev) => prev + 1);
+        // Mismatch
+        engine.playSound('wrong');
+        engine.recordWrong();
         setTimeout(() => {
           setFlipped([]);
-          setIsLocked(false);
-          setMessage('❌ Not a match');
-          setTimeout(() => setMessage(''), 800);
-        }, 800);
+        }, 900);
       }
     }
   };
 
   if (engine.gameOver) return <GameOverScreen engine={engine} />;
 
-  // Tutorial
- if (engine.showTutorial) {
+  if (engine.showTutorial) {
     return (
       <TutorialScreen
         gameName={t('games.cardFlip')}
-        demo={<HowToPlayDemo items={['🎴', '🔍', '🎴', '✅']} caption={t('tutorials.cardFlip.demo')} />}
+        demo={<HowToPlayDemo items={['🃏', '→', '✨']} caption={t('tutorials.cardFlip.demo')} />}
         instructions={[
           t('tutorials.cardFlip.step1'),
           t('tutorials.cardFlip.step2'),
           t('tutorials.cardFlip.step3'),
           t('tutorials.cardFlip.step4'),
           t('tutorials.cardFlip.step5'),
-          t('tutorials.cardFlip.step6'),
         ]}
         onStart={engine.startPlaying}
       />
     );
   }
 
-  // Time color based on remaining time
-  const timeColor = timeLeft <= 10
-    ? 'text-red-500 animate-pulse'
-    : timeLeft <= 30
-      ? 'text-amber-500'
-      : 'text-emerald-500';
-
-  const timePercent = timeLimit > 0 ? (timeLeft / timeLimit) * 100 : 0;
-  const matchedCount = matched.length;
-  const totalPairs = totalPairsRef.current;
-
-  // Determine grid columns based on number of cards
-  const cardCount = cards.length;
-  let gridCols = 'grid-cols-3';
-  if (cardCount > 12) gridCols = 'grid-cols-6';
-  else if (cardCount > 8) gridCols = 'grid-cols-5';
-  else if (cardCount > 6) gridCols = 'grid-cols-4';
-
   return (
     <div className="space-y-6">
       <GameHeader engine={engine} />
 
-      {/* Stage Info Bar */}
-      <div className="bg-gradient-to-r from-violet-50 to-indigo-50 dark:from-violet-900/20 dark:to-indigo-900/20 p-4 rounded-2xl border border-violet-100 dark:border-violet-800/30">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4 flex-wrap">
-            <span className="px-3 py-1.5 rounded-full bg-white dark:bg-gray-800 text-sm font-bold text-violet-600 dark:text-violet-400 shadow-sm">
-              🎴 Level {levelDisplay}
-            </span>
-            <span className="px-3 py-1.5 rounded-full bg-white dark:bg-gray-800 text-sm font-bold text-indigo-600 dark:text-indigo-400 shadow-sm">
-              🎯 {matchedCount}/{totalPairs} pairs
-            </span>
-            {wrongAttempts > 0 && (
-              <span className="px-3 py-1.5 rounded-full bg-white dark:bg-gray-800 text-sm font-bold text-rose-600 dark:text-rose-400 shadow-sm">
-                ❌ {wrongAttempts} misses
-              </span>
-            )}
-          </div>
-
-          {/* Timer */}
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className={`text-3xl font-bold ${timeColor} tabular-nums`}>
-                ⏰ {timeLeft}s
-              </div>
-            </div>
-          </div>
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-3 bg-violet-50 dark:bg-violet-900/20 p-4 rounded-xl">
+        <div>
+          <span className="font-bold text-violet-800 dark:text-violet-200">
+            🃏 Matched: {matched.length} / {totalPairsRef.current} pairs
+          </span>
+          <span className="ml-3 text-sm text-gray-500 font-semibold">
+            ⏱️ Time: <span className={timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-gray-700 dark:text-gray-300'}>{timeLeft}s</span>
+          </span>
         </div>
-
-        {/* Progress Bar for time */}
-        <div className="mt-3 w-full bg-white dark:bg-gray-800 rounded-full h-2 overflow-hidden">
-          <div
-            className={`h-2 rounded-full transition-all duration-1000 ease-linear ${
-              timePercent <= 20 ? 'bg-gradient-to-r from-red-500 to-orange-500' :
-              timePercent <= 50 ? 'bg-gradient-to-r from-amber-500 to-yellow-500' :
-              'bg-gradient-to-r from-emerald-500 to-teal-500'
-            }`}
-            style={{ width: `${timePercent}%` }}
-          />
-        </div>
+        <button
+          onClick={useQuickPeek}
+          disabled={peekActive}
+          className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold shadow transition-all active:scale-95 flex items-center gap-1.5"
+        >
+          👁️ Quick Peek (5🪙)
+        </button>
       </div>
 
-      {/* Message */}
       {message && (
-        <div className={`text-center text-xl font-bold py-2 rounded-xl ${
-          message.includes('✅') || message.includes('🎉') ? 'text-green-600 bg-green-50 dark:bg-green-900/20' :
-          message.includes('❌') ? 'text-red-500 bg-red-50 dark:bg-red-900/20' :
-          message.includes('⏰') ? 'text-orange-600 bg-orange-50 dark:bg-orange-900/20' :
-          'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/20'
-        }`}>
-          {message}
-        </div>
+        <div className="text-center font-bold text-emerald-600 text-base">{message}</div>
       )}
 
-      {/* Instructions */}
-      <div className="bg-indigo-50 dark:bg-indigo-900/20 p-3 rounded-xl text-center">
-        <p className="text-sm text-indigo-700 dark:text-indigo-300">
-          👆 Flip two cards to find a matching pair • ⏰ Match gives +10s • ❤️ Time out = lose a life
-        </p>
-      </div>
-
-      {/* Card Grid */}
-      <div className={`grid ${gridCols} gap-3 max-w-3xl mx-auto`}>
-        {cards.map((card, index) => {
-          const isFlipped = flipped.includes(index);
+      {/* Dynamic Responsive Card Grid */}
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3 max-w-xl mx-auto">
+        {cards.map((card, idx) => {
+          const isFlipped = flipped.includes(idx) || peekActive;
           const isMatched = matched.includes(card.pairId);
-          const isRevealed = isFlipped || isMatched;
 
           return (
             <button
               key={card.id}
-              onClick={() => handleCardClick(index)}
-              disabled={isMatched || isFlipped || isLocked}
-              className={`relative aspect-square rounded-2xl transition-all duration-500 transform-gpu ${
+              onClick={() => handleCardClick(idx)}
+              disabled={isMatched}
+              className={`h-24 sm:h-28 rounded-2xl shadow-sm transition-all duration-300 transform flex items-center justify-center text-4xl ${
                 isMatched
-                  ? 'opacity-30 scale-95 pointer-events-none'
-                  : isLocked && !isFlipped
-                    ? 'cursor-not-allowed'
-                    : 'cursor-pointer hover:scale-105'
+                  ? 'bg-emerald-100 dark:bg-emerald-900/40 border-2 border-emerald-400 opacity-80 cursor-default'
+                  : isFlipped
+                  ? 'bg-white dark:bg-gray-800 border-2 border-violet-400 rotate-y-180 scale-102'
+                  : 'bg-gradient-to-br from-violet-600 to-indigo-700 text-white hover:scale-105 active:scale-95'
               }`}
-              style={{ perspective: '1000px' }}
             >
-              <div
-                className={`relative w-full h-full transition-transform duration-500`}
-                style={{
-                  transformStyle: 'preserve-3d',
-                  transform: isRevealed ? 'rotateY(180deg)' : 'rotateY(0deg)',
-                }}
-              >
-                {/* Back of card (shown first) */}
-                <div
-                  className="absolute inset-0 rounded-2xl bg-gradient-to-br from-violet-500 via-indigo-500 to-purple-600 shadow-lg flex items-center justify-center overflow-hidden"
-                  style={{ backfaceVisibility: 'hidden' }}
-                >
-                  {/* Decorative pattern on back */}
-                  <div className="absolute inset-0 opacity-20">
-                    <div className="absolute top-2 left-2 w-8 h-8 border-2 border-white rounded-full"></div>
-                    <div className="absolute bottom-2 right-2 w-6 h-6 border-2 border-white rounded-full"></div>
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 border-2 border-white rounded-full"></div>
-                  </div>
-                  <div className="relative text-white text-3xl font-bold">?</div>
-                </div>
-
-                {/* Front of card (emoji) */}
-                <div
-                  className={`absolute inset-0 rounded-2xl shadow-lg flex items-center justify-center border-2 ${
-                    isMatched
-                      ? 'bg-gradient-to-br from-emerald-100 to-teal-100 dark:from-emerald-900/40 dark:to-teal-900/40 border-emerald-400'
-                      : 'bg-white dark:bg-gray-800 border-indigo-200 dark:border-indigo-700'
-                  }`}
-                  style={{
-                    backfaceVisibility: 'hidden',
-                    transform: 'rotateY(180deg)',
-                  }}
-                >
-                  <span className="text-4xl md:text-5xl">{card.emoji}</span>
-                  {isMatched && (
-                    <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-white text-xs">
-                      ✓
-                    </div>
-                  )}
-                </div>
-              </div>
+              {isFlipped || isMatched ? card.emoji : '❓'}
             </button>
           );
         })}
       </div>
-
-      {/* Complete overlay */}
-      {isComplete && (
-        <div className="text-center py-4">
-          <div className="text-4xl mb-2">🎉</div>
-          <p className="text-xl font-bold text-emerald-600">Stage Complete!</p>
-          <p className="text-sm text-gray-500">Loading next level...</p>
-        </div>
-      )}
     </div>
   );
 };
 
 // =============================================================================
-// GAME 7 : MINDFUL MOMENTS
+// GAME 7: MINDFUL MOMENTS (Interactive Biofeedback Touch Breathing Orb)
 // =============================================================================
 
 const MindfulMoments = ({ engine }) => {
   const { t } = useTranslation();
-  const [phase, setPhase] = useState('start');
-  const [breathCount, setBreathCount] = useState(0);
-  const [message, setMessage] = useState('');
-  const timerRef = useRef(null);
+  const [phase, setPhase] = useState('breathe');
+  const [cycleStep, setCycleStep] = useState('Inhale'); // 'Inhale' | 'Hold' | 'Exhale'
+  const [completedCycles, setCompletedCycles] = useState(0);
+  const targetCycles = Math.min(4 + engine.level, 10);
+  const [orbScale, setOrbScale] = useState(1);
 
-  useEffect(() => () => clearInterval(timerRef.current), []);
+  useEffect(() => {
+    if (phase !== 'breathe') return;
 
-  const totalBreaths = Math.min(6 + engine.level * 2, 20);
+    let stepTimer;
+    let breathIndex = 0;
 
-  const startBreathing = () => {
-    setPhase('breathing');
-    setBreathCount(0);
-    setMessage('🌬️ Breathe in...');
-    let count = 0;
-    timerRef.current = setInterval(() => {
-      count += 1;
-      setBreathCount(count);
-      setMessage(count % 2 === 1 ? '🌬️ Breathe in...' : '😮\u200d💨 Breathe out...');
-      if (count >= totalBreaths * 2) {
-        clearInterval(timerRef.current);
-        setPhase('complete');
-        const points = engine.recordCorrect(50);
-        setMessage(`🧘 Excellent! +${points} points!`);
-        engine.levelUp();
-      }
-    }, 2000);
-  };
+    const runBreathCycle = () => {
+      // 1. Inhale (4s)
+      setCycleStep('Inhale');
+      setOrbScale(1.4);
+      engine.playSound('checkpoint');
 
-  if (engine.gameOver) return <GameOverScreen engine={engine} />;
+      stepTimer = setTimeout(() => {
+        // 2. Hold (2s)
+        setCycleStep('Hold Gently');
+        setOrbScale(1.45);
 
- if (engine.showTutorial) {
+        stepTimer = setTimeout(() => {
+          // 3. Exhale (4s)
+          setCycleStep('Exhale Slowly');
+          setOrbScale(1.0);
+          engine.playSound('coin');
+
+          stepTimer = setTimeout(() => {
+            breathIndex++;
+            setCompletedCycles(breathIndex);
+
+            if (breathIndex >= targetCycles) {
+              setPhase('complete');
+              const pts = engine.recordCorrect(40 + engine.level * 5);
+              engine.pushToast(`🌸 Mindfulness session completed! +${pts} pts`, 'checkpoint');
+            } else {
+              runBreathCycle();
+            }
+          }, 3500);
+        }, 2000);
+      }, 3500);
+    };
+
+    runBreathCycle();
+
+    return () => clearTimeout(stepTimer);
+  }, [phase, targetCycles]);
+
+  if (engine.showTutorial) {
     return (
       <TutorialScreen
         gameName={t('games.mindfulMoments')}
-        demo={<HowToPlayDemo items={['🌬️', '😮‍💨']} caption={t('tutorials.mindfulMoments.demo')} />}
+        demo={<HowToPlayDemo items={['🌬️', '→', '🧘']} caption={t('tutorials.mindfulMoments.demo')} />}
         instructions={[
-          t('tutorials.mindfulMoments.step1'),
-          t('tutorials.mindfulMoments.step2'),
-          t('tutorials.mindfulMoments.step3'),
-          t('tutorials.mindfulMoments.step4'),
-          t('tutorials.mindfulMoments.step5'),
+          'Follow the expanding and contracting glowing orb with your breath.',
+          'Breathe in deeply as the orb expands.',
+          'Hold gently at the peak.',
+          'Breathe out slowly as the orb returns to rest.',
         ]}
         onStart={engine.startPlaying}
       />
@@ -1567,43 +1627,52 @@ const MindfulMoments = ({ engine }) => {
   return (
     <div className="space-y-6">
       <GameHeader engine={engine} />
-      <div className="bg-rose-50 dark:bg-rose-900/20 p-8 rounded-lg text-center">
-        {phase === 'start' && (
-          <div>
-            <h2 className="text-3xl font-bold mb-4">🧘 Mindful Moments</h2>
-            <p className="text-lg mb-6">Level {engine.level} · {totalBreaths} breaths</p>
-            <button
-              onClick={startBreathing}
-              className="px-8 py-4 bg-primary-600 text-white rounded-lg text-xl font-bold hover:bg-primary-700 transition-colors"
-            >
-              Start Session
-            </button>
-          </div>
-        )}
-        {phase === 'breathing' && (
-          <div>
-            <div className="text-8xl mb-4 animate-pulse">{breathCount % 2 === 1 ? '🌬️' : '😮\u200d💨'}</div>
-            <p className="text-3xl font-bold mb-4">{message}</p>
-            <p className="text-xl">Breath {Math.ceil(breathCount / 2)} of {totalBreaths}</p>
-            <div className="mt-4 w-full bg-gray-200 rounded-full h-4 max-w-md mx-auto">
-              <div
-                className="bg-primary-600 h-4 rounded-full transition-all duration-500"
-                style={{ width: `${(breathCount / (totalBreaths * 2)) * 100}%` }}
-              />
+
+      <div className="bg-rose-50 dark:bg-rose-900/20 p-8 rounded-3xl text-center shadow-sm max-w-lg mx-auto">
+        {phase === 'breathe' ? (
+          <div className="space-y-8 py-4">
+            <div>
+              <h3 className="text-2xl font-bold text-rose-800 dark:text-rose-200">🧘 Gentle Mindful Breathing</h3>
+              <p className="text-xs text-gray-500 mt-1">Cycle {completedCycles + 1} of {targetCycles} • Synchronize your breath</p>
             </div>
+
+            {/* Glowing Biofeedback Orb */}
+            <div className="relative w-56 h-56 mx-auto flex items-center justify-center">
+              <div
+                className="absolute inset-0 rounded-full bg-gradient-to-tr from-rose-400 via-pink-300 to-indigo-300 opacity-30 blur-2xl transition-transform duration-1000"
+                style={{ transform: `scale(${orbScale * 1.3})` }}
+              />
+              <div
+                className="w-40 h-40 rounded-full bg-gradient-to-tr from-rose-500 via-pink-400 to-purple-500 shadow-2xl flex flex-col items-center justify-center text-white transition-all duration-[3000ms] ease-in-out cursor-pointer"
+                style={{ transform: `scale(${orbScale})` }}
+              >
+                <span className="text-3xl mb-1">{orbScale > 1.2 ? '🌬️' : '🌸'}</span>
+                <span className="text-base font-bold tracking-wider">{cycleStep}</span>
+              </div>
+            </div>
+
+            <p className="text-base font-medium text-gray-600 dark:text-gray-300">
+              {cycleStep === 'Inhale' && 'Breathe in peace and clarity through your nose...'}
+              {cycleStep === 'Hold Gently' && 'Hold gently and rest in this quiet moment...'}
+              {cycleStep === 'Exhale Slowly' && 'Breathe out all tension and stress through your mouth...'}
+            </p>
           </div>
-        )}
-        {phase === 'complete' && (
-          <div>
-            <Trophy className="w-24 h-24 text-yellow-500 mx-auto mb-4" />
-            <h2 className="text-3xl font-bold mb-4">🧘 Session Complete!</h2>
-            <p className="text-xl mb-2">{message}</p>
-            <p className="text-lg mb-4">Level {engine.level} reached!</p>
+        ) : (
+          <div className="space-y-6 py-6 animate-fade-in">
+            <div className="text-6xl">🌸</div>
+            <h3 className="text-3xl font-bold text-rose-900 dark:text-rose-100">Peaceful Session Completed</h3>
+            <p className="text-gray-600 dark:text-gray-300 text-base leading-relaxed">
+              "Your mind is calm, clear, and centered. Every conscious breath revitalizes and restores your inner vitality."
+            </p>
             <button
-              onClick={() => setPhase('start')}
-              className="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+              onClick={() => {
+                setPhase('breathe');
+                setCompletedCycles(0);
+                engine.levelUp();
+              }}
+              className="px-8 py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-bold shadow-lg transition-all active:scale-98"
             >
-              Next Session
+              🌱 Next Calming Stage (Lvl {engine.level + 1})
             </button>
           </div>
         )}
@@ -1611,10 +1680,6 @@ const MindfulMoments = ({ engine }) => {
     </div>
   );
 };
-
-// =============================================================================
-// GAME REGISTRY
-// =============================================================================
 
 const GAME_COMPONENTS = {
   1: MemoryLane,
