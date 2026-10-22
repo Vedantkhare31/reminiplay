@@ -169,7 +169,7 @@ const GestureDrawing = () => {
       if (!token) return;
       await fetch('/api/analytics/session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': Bearer \ },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(sessionData),
       });
     } catch (e) { /* silent fail */ }
