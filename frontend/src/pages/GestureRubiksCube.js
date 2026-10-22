@@ -11,6 +11,7 @@ import {
   ChevronRight, Hand, X, Lock, Unlock
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { logGameSession } from '../utils/analytics';
 
 // ============================================================
 // SINGLETON WEB AUDIO SYNTHESIZER (ZERO LATENCY)
@@ -257,17 +258,7 @@ const GestureRubiksCube = () => {
   const sessionStartTimeRef = useRef(Date.now());
 
   // Helper: log session to analytics backend
-  const logSession = async (sessionData) => {
-    try {
-      const token = localStorage.getItem('reminiplay_token');
-      if (!token) return;
-      await fetch('/api/analytics/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(sessionData),
-      });
-    } catch (e) { /* silent fail */ }
-  };
+  const logSession = async (sessionData) => { await logGameSession(sessionData); };
 
   // DOM & Canvas Refs
   const mountRef          = useRef(null);
@@ -328,6 +319,30 @@ const GestureRubiksCube = () => {
   const [totalSolved, setTotalSolved]     = useState(0);
   const [stageSolved, setStageSolved]     = useState(false);
   const [moveCount, setMoveCount]         = useState(0);
+  const moveCountRef = useRef(0);
+  const rubikLoggedRef = useRef(false);
+  useEffect(() => { moveCountRef.current = moveCount; }, [moveCount]);
+
+  useEffect(() => {
+    return () => {
+      if (moveCountRef.current >= 2 && !rubikLoggedRef.current) {
+        const timeSpent = Math.max(1, Math.round((Date.now() - sessionStartTimeRef.current) / 1000));
+        logGameSession({
+          gameType: 'gestureRubik',
+          correctAttempts: moveCountRef.current,
+          incorrectAttempts: 0,
+          missedAttempts: 0,
+          totalAttempts: moveCountRef.current,
+          startedTasks: 1,
+          completedTasks: 0,
+          responseTimes: [timeSpent],
+          sessionDuration: timeSpent,
+          stage: 1,
+          score: Math.min(100, moveCountRef.current * 10),
+        });
+      }
+    };
+  }, []);
   const [isSoundOn, setIsSoundOn]         = useState(true);
   const [detectorReady, setDetectorReady] = useState(false);
   const [handCount, setHandCount]         = useState(0);
@@ -791,6 +806,7 @@ const GestureRubiksCube = () => {
     }
 
     // Log analytics session
+    rubikLoggedRef.current = true;
     logSession({
       gameType: 'gestureRubik',
       correctAttempts: newTotal,
@@ -813,6 +829,7 @@ const GestureRubiksCube = () => {
   const startPuzzle = useCallback(async (depth = null) => {
     setStageSolved(false);
     stageSolvedRef.current = false;
+    rubikLoggedRef.current = false;
     setMoveCount(0);
     setHintMove(null);
     setStageStartTime(Date.now());

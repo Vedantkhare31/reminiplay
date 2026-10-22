@@ -107,11 +107,20 @@ const Analytics = () => {
     }
   }, [timeframe]);
 
-  // Initial fetch + 30-second polling
+  // Initial fetch + 10-second polling + live event listener on session log
   useEffect(() => {
     fetchData();
-    intervalRef.current = setInterval(() => fetchData(), 30000);
-    return () => clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => fetchData(), 10000);
+
+    const onSessionLogged = () => {
+      fetchData(false);
+    };
+    window.addEventListener('reminiplay_session_logged', onSessionLogged);
+
+    return () => {
+      clearInterval(intervalRef.current);
+      window.removeEventListener('reminiplay_session_logged', onSessionLogged);
+    };
   }, [fetchData]);
 
   const handleRefresh = () => fetchData(true);

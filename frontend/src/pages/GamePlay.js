@@ -9,6 +9,7 @@ import Confetti from 'react-confetti';
 import { useAuth } from '../context/AuthContext';
 import AIGameService from '../utils/aiGameService';
 import GameHistoryService from '../services/GameHistoryService';
+import { logGameSession } from '../utils/analytics';
 // =============================================================================
 // SOUND ENGINE — synthesized with the Web Audio API so it never depends on
 // an external file/URL (which is why sounds used to silently fail before).
@@ -114,6 +115,55 @@ function usePlayerEngine() {
   const [toasts, setToasts] = useState([]);
   const [sessionId, setSessionId] = useState(0);
 
+  const sessionStartTimeRef = useRef(Date.now());
+  const lastActionTimeRef = useRef(Date.now());
+  const correctCountRef = useRef(0);
+  const wrongCountRef = useRef(0);
+  const responseTimesRef = useRef([]);
+
+  const logCurrentGameSession = useCallback((completed = 1) => {
+    const attempts = correctCountRef.current + wrongCountRef.current;
+    if (attempts === 0) return;
+    const dur = Math.max(1, Math.round((Date.now() - sessionStartTimeRef.current) / 1000));
+    const gameId = window.location.pathname.split('/game/')[1] || 'unknown';
+    const gameKeyMap = {
+      '1': 'memoryLane',
+      '2': 'routineBuilder',
+      '3': 'patternQuest',
+      '4': 'storyWeaver',
+      '5': 'facePlace',
+      '6': 'cardFlip',
+      '7': 'mindfulMoments',
+    };
+    const gameType = gameKeyMap[gameId] || ('game-' + gameId);
+
+    logGameSession({
+      gameType,
+      correctAttempts: correctCountRef.current,
+      incorrectAttempts: wrongCountRef.current,
+      missedAttempts: 0,
+      totalAttempts: attempts,
+      startedTasks: 1,
+      completedTasks: completed,
+      responseTimes: responseTimesRef.current.length > 0 ? responseTimesRef.current : [dur],
+      sessionDuration: dur,
+      stage: level,
+      score: scoreRef.current,
+    });
+
+    correctCountRef.current = 0;
+    wrongCountRef.current = 0;
+    responseTimesRef.current = [];
+    sessionStartTimeRef.current = Date.now();
+    lastActionTimeRef.current = Date.now();
+  }, [level]);
+
+  useEffect(() => {
+    return () => {
+      logCurrentGameSession(0);
+    };
+  }, [logCurrentGameSession]);
+
   const scoreRef = useRef(0);
   useEffect(() => { scoreRef.current = score; }, [score]);
 
@@ -131,6 +181,7 @@ function usePlayerEngine() {
   }, []);
 
   const triggerGameOver = useCallback(() => {
+    logCurrentGameSession(0);
     setGameOver(true);
     const newBest = Math.max(bestScore, scoreRef.current);
     setBestScore(newBest);
@@ -141,6 +192,10 @@ function usePlayerEngine() {
   }, [coins, level, checkpointLevel, syncProgress, bestScore, playSound]);
 
   const recordCorrect = useCallback((basePoints) => {
+    const dt = Math.max(0.1, (Date.now() - lastActionTimeRef.current) / 1000);
+    responseTimesRef.current.push(Number(dt.toFixed(2)));
+    correctCountRef.current += 1;
+    lastActionTimeRef.current = Date.now();
     let awardedPoints = 0;
     setCombo((c) => {
       const newCombo = c + 1;
@@ -174,6 +229,7 @@ function usePlayerEngine() {
   }, [level, playSound, pushToast]);
 
   const levelUp = useCallback(() => {
+    logCurrentGameSession(1);
     playSound('levelup');
     setShowCelebration(true);
     setLevel((l) => {
@@ -228,6 +284,10 @@ function usePlayerEngine() {
   }, [playSound, pushToast, level, lives]);
 
   const recordWrong = useCallback(() => {
+    const dt = Math.max(0.1, (Date.now() - lastActionTimeRef.current) / 1000);
+    responseTimesRef.current.push(Number(dt.toFixed(2)));
+    wrongCountRef.current += 1;
+    lastActionTimeRef.current = Date.now();
     setCombo(0);
     playSound('wrong');
     setLives((l) => {

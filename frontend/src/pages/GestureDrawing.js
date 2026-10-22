@@ -12,6 +12,7 @@ import {
   Zap, Heart, PlusCircle, Compass, Hash, Navigation
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { logGameSession } from '../utils/analytics';
 import { SHAPE_LIBRARY, getShapeForLevel, getVariationWaypoints } from './shapeLibrary';
 
 // ============================================================
@@ -163,17 +164,7 @@ const GestureDrawing = () => {
   const sessionStartTimeRef = useRef(Date.now());
 
   // Helper: log session to analytics backend
-  const logSession = async (sessionData) => {
-    try {
-      const token = localStorage.getItem('reminiplay_token');
-      if (!token) return;
-      await fetch('/api/analytics/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(sessionData),
-      });
-    } catch (e) { /* silent fail */ }
-  };
+  const logSession = async (sessionData) => { await logGameSession(sessionData); };
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const demoCanvasRef = useRef(null);
@@ -981,6 +972,21 @@ const GestureDrawing = () => {
       }, 2600);
     } else {
       setMessage(`❌ Inaccurate! Accuracy: ${finalScore}%. Need 65%+ to clear.`);
+      const failDuration = Math.max(1, Math.round((Date.now() - sessionStartTimeRef.current) / 1000));
+      logSession({
+        gameType: 'gestureDraw',
+        correctAttempts: 0,
+        incorrectAttempts: 1,
+        missedAttempts: 0,
+        totalAttempts: 1,
+        startedTasks: 1,
+        completedTasks: 0,
+        responseTimes: [failDuration],
+        sessionDuration: failDuration,
+        stage: level,
+        score: finalScore,
+      });
+      sessionStartTimeRef.current = Date.now();
       if (soundEnabledRef.current) playFailSound();
       setStreak(0);
       setLives(prev => {
