@@ -119,10 +119,11 @@ function usePlayerEngine() {
   const lastActionTimeRef = useRef(Date.now());
   const correctCountRef = useRef(0);
   const wrongCountRef = useRef(0);
+  const missedCountRef = useRef(0);
   const responseTimesRef = useRef([]);
 
   const logCurrentGameSession = useCallback((completed = 1) => {
-    const attempts = correctCountRef.current + wrongCountRef.current;
+    const attempts = correctCountRef.current + wrongCountRef.current + missedCountRef.current;
     if (attempts === 0) return;
     const dur = Math.max(1, Math.round((Date.now() - sessionStartTimeRef.current) / 1000));
     const gameId = window.location.pathname.split('/game/')[1] || 'unknown';
@@ -141,7 +142,7 @@ function usePlayerEngine() {
       gameType,
       correctAttempts: correctCountRef.current,
       incorrectAttempts: wrongCountRef.current,
-      missedAttempts: 0,
+      missedAttempts: missedCountRef.current,
       totalAttempts: attempts,
       startedTasks: 1,
       completedTasks: completed,
@@ -153,6 +154,7 @@ function usePlayerEngine() {
 
     correctCountRef.current = 0;
     wrongCountRef.current = 0;
+    missedCountRef.current = 0;
     responseTimesRef.current = [];
     sessionStartTimeRef.current = Date.now();
     lastActionTimeRef.current = Date.now();
@@ -283,6 +285,16 @@ function usePlayerEngine() {
     setSessionId((s) => s + 1);
   }, [playSound, pushToast, level, lives]);
 
+  const recordMissed = useCallback((reason = 'timeout') => {
+    const dt = Math.max(0.1, (Date.now() - lastActionTimeRef.current) / 1000);
+    responseTimesRef.current.push(Number(dt.toFixed(2)));
+    missedCountRef.current += 1;
+    lastActionTimeRef.current = Date.now();
+    setCombo(0);
+    playSound('wrong');
+    pushToast('⏳ Missed attempt recorded', 'wrong');
+  }, [playSound, pushToast]);
+
   const recordWrong = useCallback(() => {
     const dt = Math.max(0.1, (Date.now() - lastActionTimeRef.current) / 1000);
     responseTimesRef.current.push(Number(dt.toFixed(2)));
@@ -337,7 +349,7 @@ function usePlayerEngine() {
   return {
     score, bestScore, coins, level, lives, maxLives: MAX_LIVES, combo,
     checkpointLevel, showTutorial, gameOver, showCelebration, isMuted, toasts,
-    sessionId, startPlaying, recordCorrect, recordWrong, levelUp,
+    sessionId, startPlaying, recordCorrect, recordWrong, recordMissed, levelUp,
     useCoinToSaveLife, restart, toggleMute, pushToast, playSound,
   };
 }
@@ -989,7 +1001,18 @@ const PatternQuest = ({ engine }) => {
         ))}
       </div>
 
-      <div className="text-center">
+      <div className="text-center flex justify-center items-center gap-4">
+        <button
+          onClick={() => {
+            engine.recordMissed('skipped_pattern');
+            const result = AIGameService.generatePattern(engine.level);
+            setRound(result);
+            setSelected(null);
+          }}
+          className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 text-gray-600 dark:text-gray-300 font-semibold"
+        >
+          ⏳ Skip Pattern
+        </button>
         {!hintShown ? (
           <button
             onClick={() => setHintShown(true)}
@@ -1135,15 +1158,30 @@ const StoryWeaver = ({ engine }) => {
 
             <div className="flex items-center justify-between text-xs text-gray-500 font-semibold">
               <span>Question {currentQuestionIdx + 1} of {storyData.questions.length}</span>
-              <div className="flex gap-1">
-                {storyData.questions.map((_, i) => (
-                  <div
-                    key={i}
-                    className={`w-4 h-1.5 rounded-full ${
-                      i < currentQuestionIdx ? 'bg-emerald-500' : i === currentQuestionIdx ? 'bg-orange-500' : 'bg-gray-300 dark:bg-gray-700'
-                    }`}
-                  />
-                ))}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    engine.recordMissed('skipped_question');
+                    if (currentQuestionIdx < storyData.questions.length - 1) {
+                      setCurrentQuestionIdx(i => i + 1);
+                    } else {
+                      engine.levelUp();
+                    }
+                  }}
+                  className="px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors text-[11px]"
+                >
+                  ⏳ Skip (Pass)
+                </button>
+                <div className="flex gap-1">
+                  {storyData.questions.map((_, i) => (
+                    <div
+                      key={i}
+                      className={`w-4 h-1.5 rounded-full ${
+                        i < currentQuestionIdx ? 'bg-emerald-500' : i === currentQuestionIdx ? 'bg-orange-500' : 'bg-gray-300 dark:bg-gray-700'
+                      }`}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -1368,6 +1406,18 @@ const FacePlace = ({ engine }) => {
       </div>
 
       <div className="flex justify-center gap-3">
+        {selectedFace && (
+          <button
+            onClick={() => {
+              engine.recordMissed('skipped_pair');
+              setSelectedFace(null);
+              setSelectedPlace(null);
+            }}
+            className="px-5 py-2.5 rounded-xl bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold text-xs shadow-md transition-all"
+          >
+            ⏳ Skip this Person
+          </button>
+        )}
         <button
           onClick={useClueHint}
           className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5"
@@ -1410,8 +1460,8 @@ const CardFlip = ({ engine }) => {
       setTimeLeft(prev => {
         if (prev <= 1) {
           clearInterval(timerRef.current);
-          engine.recordWrong();
-          engine.pushToast('⏰ Time expired for this round!', 'wrong');
+          engine.recordMissed('timeout');
+          engine.pushToast('⏰ Time expired! Missed attempt recorded', 'wrong');
           return 0;
         }
         return prev - 1;
