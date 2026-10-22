@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Webcam from 'react-webcam';
@@ -157,6 +158,22 @@ class OneEuroFilter {
 const GestureDrawing = () => {
   const navigate = useNavigate();
   const { user, syncProgress } = useAuth();
+
+  // Session analytics tracking
+  const sessionStartTimeRef = useRef(Date.now());
+
+  // Helper: log session to analytics backend
+  const logSession = async (sessionData) => {
+    try {
+      const token = localStorage.getItem('reminiplay_token');
+      if (!token) return;
+      await fetch('/api/analytics/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': Bearer \ },
+        body: JSON.stringify(sessionData),
+      });
+    } catch (e) { /* silent fail */ }
+  };
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const demoCanvasRef = useRef(null);
@@ -938,6 +955,23 @@ const GestureDrawing = () => {
         );
       }
       persistStats(newCoinsTotal, score + totalPointsEarned, nextLevel, nextCp);
+
+      // Log analytics session
+      const sessionDuration = Math.round((Date.now() - sessionStartTimeRef.current) / 1000);
+      logSession({
+        gameType: 'gestureDraw',
+        correctAttempts: 1,
+        incorrectAttempts: 0,
+        missedAttempts: 0,
+        totalAttempts: 1,
+        startedTasks: 1,
+        completedTasks: 1,
+        responseTimes: [sessionDuration],
+        sessionDuration,
+        stage: nextLevel,
+        score: totalPointsEarned,
+      });
+      sessionStartTimeRef.current = Date.now();
 
       setIsComplete(true);
       setTimeout(() => {

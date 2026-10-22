@@ -26,6 +26,7 @@ model User {
 
   otps              OTPCode[]
   scores            GameScore[]
+  sessions          GameSession[]
 
   @@index([email])
 }
@@ -60,4 +61,26 @@ model GameScore {
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model GameSession {
+  id                String   @id @default(cuid())
+  userId            String
+  gameType          String   // "gestureDraw" | "gestureRubik" | "memoryLane" | etc.
+  correctAttempts   Int      @default(0)
+  incorrectAttempts Int      @default(0)
+  missedAttempts    Int      @default(0)
+  totalAttempts     Int      @default(0)
+  startedTasks      Int      @default(0)
+  completedTasks    Int      @default(0)
+  responseTimes     String   @default("[]")  // JSON array of seconds
+  sessionDuration   Int      @default(0)     // seconds
+  stage             Int      @default(1)
+  score             Int      @default(0)
+  createdAt         DateTime @default(now())
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
 }

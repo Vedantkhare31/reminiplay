@@ -71,6 +71,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const authRoutes = require('./routes/authRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 // ============================================================
 // ROUTES
@@ -79,6 +80,9 @@ const authRoutes = require('./routes/authRoutes');
 // Authentication & User Data Sync
 app.use('/api/auth', authRoutes);
 app.use('/api/user', authRoutes);
+// Analytics
+app.use('/api/analytics', analyticsRoutes);
+
 
 // Health check
 app.get('/health', (req, res) => {

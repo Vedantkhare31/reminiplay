@@ -1,285 +1,390 @@
-import React, { useState, useEffect } from 'react';
-import { useTranslation } from 'react-i18next';
-import { 
-  TrendingUp, TrendingDown, Activity, Brain, Users, Calendar,
-  ArrowUp, ArrowDown, Download, Filter, RefreshCw, Zap,
-  Clock, Award, Target
-} from 'lucide-react';
-import { Line, Bar, Doughnut } from 'react-chartjs-2';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  ArcElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-} from 'chart.js';
+  Brain, Target, AlertCircle, CheckCircle, XCircle, Clock,
+  Activity, Calendar, RefreshCw, TrendingUp, TrendingDown,
+  ArrowUp, ArrowDown
+} from 'lucide-react';
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, Legend, ResponsiveContainer
+} from 'recharts';
+import { useAuth } from '../context/AuthContext';
+import api from '../utils/api';
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  ArcElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-);
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-const Analytics = () => {
-  const { t } = useTranslation();
-  const [timeframe, setTimeframe] = useState('week');
-  const [isLoading, setIsLoading] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState(new Date());
-  const [liveData, setLiveData] = useState({
-    cognitiveScore: 72,
-    gamesPlayed: 1247,
-    activePatients: 18,
-    completionRate: 68
-  });
+const fmt = (v, decimals = 1) =>
+  v === null || v === undefined ? '—' : Number(v).toFixed(decimals);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const change = Math.random() > 0.7 ? (Math.random() - 0.5) * 5 : 0;
-      setLiveData(prev => ({
-        cognitiveScore: Math.min(100, Math.max(0, prev.cognitiveScore + change)),
-        gamesPlayed: prev.gamesPlayed + Math.floor(Math.random() * 3),
-        activePatients: prev.activePatients + (Math.random() > 0.8 ? (Math.random() > 0.5 ? 1 : -1) : 0),
-        completionRate: Math.min(100, Math.max(0, prev.completionRate + (Math.random() - 0.5) * 2))
-      }));
-      setLastUpdated(new Date());
-    }, 5000);
-    return () => clearInterval(interval);
-  }, []);
+const EMPTY_METRICS = {
+  cognitiveScore: 0,
+  accuracy: 0,
+  errorRate: 0,
+  taskCompletionRate: 0,
+  missedAttemptRate: 0,
+  medianResponseTime: 0,
+  gamesPlayed: 0,
+  engagementDays: 0,
+  byGame: [],
+};
 
-  const handleRefresh = () => {
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      setLastUpdated(new Date());
-    }, 1000);
+// ─── KPI Card ───────────────────────────────────────────────────────────────
+
+const KpiCard = ({ icon: Icon, label, value, unit = '', formula, color, trend }) => {
+  const colors = {
+    blue:   { bg: 'bg-blue-500/10 dark:bg-blue-500/20',   icon: 'text-blue-500',   border: 'border-blue-500/20' },
+    green:  { bg: 'bg-green-500/10 dark:bg-green-500/20', icon: 'text-green-500',  border: 'border-green-500/20' },
+    red:    { bg: 'bg-red-500/10 dark:bg-red-500/20',     icon: 'text-red-500',    border: 'border-red-500/20' },
+    purple: { bg: 'bg-purple-500/10 dark:bg-purple-500/20',icon: 'text-purple-500',border: 'border-purple-500/20' },
+    orange: { bg: 'bg-orange-500/10 dark:bg-orange-500/20',icon: 'text-orange-500',border: 'border-orange-500/20' },
+    cyan:   { bg: 'bg-cyan-500/10 dark:bg-cyan-500/20',   icon: 'text-cyan-500',   border: 'border-cyan-500/20' },
+    indigo: { bg: 'bg-indigo-500/10 dark:bg-indigo-500/20',icon: 'text-indigo-500',border: 'border-indigo-500/20' },
+    amber:  { bg: 'bg-amber-500/10 dark:bg-amber-500/20', icon: 'text-amber-500',  border: 'border-amber-500/20' },
   };
-
-  const cognitiveData = {
-    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-    datasets: [
-      {
-        label: t('analytics.cognitiveTrend'),
-        data: [65, 68, 72, 70, 75, 78, Math.round(liveData.cognitiveScore)],
-        borderColor: 'rgb(79, 109, 245)',
-        backgroundColor: 'rgba(79, 109, 245, 0.1)',
-        fill: true,
-        tension: 0.4,
-      },
-      {
-        label: t('analytics.memoryScore'),
-        data: [60, 63, 67, 70, 72, 76, Math.round(liveData.cognitiveScore * 0.95)],
-        borderColor: 'rgb(16, 185, 129)',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-        fill: true,
-        tension: 0.4,
-      },
-      {
-        label: t('analytics.attentionScore'),
-        data: [55, 58, 62, 65, 68, 70, Math.round(liveData.cognitiveScore * 0.88)],
-        borderColor: 'rgb(139, 92, 246)',
-        backgroundColor: 'rgba(139, 92, 246, 0.1)',
-        fill: true,
-        tension: 0.4,
-      },
-    ],
-  };
-
-  const gamePerformanceData = {
-    labels: [t('games.memoryLane'), t('games.routineBuilder'), t('games.patternQuest'), t('games.storyWeaver'), t('games.facePlace')],
-    datasets: [
-      {
-        label: t('analytics.gamePerformance'),
-        data: [78, 65, 82, 70, 75],
-        backgroundColor: [
-          'rgba(79, 109, 245, 0.6)',
-          'rgba(16, 185, 129, 0.6)',
-          'rgba(245, 158, 11, 0.6)',
-          'rgba(139, 92, 246, 0.6)',
-          'rgba(236, 72, 153, 0.6)',
-        ],
-        borderColor: [
-          'rgb(79, 109, 245)',
-          'rgb(16, 185, 129)',
-          'rgb(245, 158, 11)',
-          'rgb(139, 92, 246)',
-          'rgb(236, 72, 153)',
-        ],
-        borderWidth: 2,
-      },
-    ],
-  };
-
-  const riskDistributionData = {
-    labels: [t('analytics.lowRisk'), t('analytics.moderateRisk'), t('analytics.highRisk')],
-    datasets: [
-      {
-        data: [45, 35, 20],
-        backgroundColor: ['#10b981', '#f59e0b', '#ef4444'],
-        borderWidth: 0,
-      },
-    ],
-  };
-
-  const stats = [
-    { label: t('analytics.avgCognitiveScore'), value: `${Math.round(liveData.cognitiveScore)}%`, change: '+8%', trend: 'up', icon: Brain },
-    { label: t('analytics.gamesPlayed'), value: liveData.gamesPlayed.toLocaleString(), change: '+12%', trend: 'up', icon: Activity },
-    { label: t('analytics.activePatients'), value: liveData.activePatients, change: '+3', trend: 'up', icon: Users },
-    { label: t('analytics.completionRate'), value: `${Math.round(liveData.completionRate)}%`, change: '-2%', trend: 'down', icon: Calendar },
-  ];
-
-  const recentActivities = [
-    { patient: 'Ram Kumar', activity: `${t('games.memoryLane')} Level 5`, time: '2 hours ago', score: '+15' },
-    { patient: 'Sita Devi', activity: t('games.patternQuest'), time: '3 hours ago', score: '-10' },
-    { patient: 'Mohan Singh', activity: `${t('games.routineBuilder')} Level 8`, time: '5 hours ago', score: '+20' },
-  ];
+  const c = colors[color] || colors.blue;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-primary-600 to-purple-500 bg-clip-text text-transparent">
-            {t('analytics.title')}
-          </h1>
-          <p className="mt-2 text-gray-600 dark:text-gray-300 flex items-center">
-            <span>{t('analytics.subtitle')}</span>
-            <span className="ml-3 text-sm text-emerald-500 flex items-center">
-              <span className="w-2 h-2 bg-emerald-500 rounded-full mr-1 animate-pulse"></span>
-              {t('analytics.live')}
-            </span>
-          </p>
+    <div className={`rounded-2xl p-5 border ${c.border} bg-white dark:bg-slate-800 shadow-sm hover:shadow-md transition-shadow`}>
+      <div className="flex items-start justify-between">
+        <div className={`p-2.5 rounded-xl ${c.bg}`}>
+          <Icon className={`w-5 h-5 ${c.icon}`} />
         </div>
-        <div className="flex items-center space-x-3 mt-4 md:mt-0">
-          <span className="text-sm text-gray-500 dark:text-gray-400 flex items-center">
-            <Clock className="w-4 h-4 mr-1" />
-            {t('analytics.updated')}: {lastUpdated.toLocaleTimeString()}
+        {trend !== undefined && (
+          <span className={`text-xs font-semibold flex items-center gap-0.5 ${trend >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+            {trend >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+            {Math.abs(trend).toFixed(1)}%
           </span>
-          <select 
-            value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value)}
-            className="px-4 py-2 glass-card rounded-xl text-gray-900 dark:text-white"
-          >
-            <option value="week">{t('analytics.thisWeek')}</option>
-            <option value="month">{t('analytics.thisMonth')}</option>
-            <option value="quarter">{t('analytics.quarter')}</option>
-          </select>
-          <button 
+        )}
+      </div>
+      <p className="mt-4 text-3xl font-bold text-gray-900 dark:text-white">
+        {value}<span className="text-lg font-medium text-gray-400 ml-0.5">{unit}</span>
+      </p>
+      <p className="mt-1 text-sm font-medium text-gray-600 dark:text-gray-300">{label}</p>
+      {formula && (
+        <p className="mt-1 text-xs text-gray-400 dark:text-gray-500 font-mono">{formula}</p>
+      )}
+    </div>
+  );
+};
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+
+const Analytics = () => {
+  const { user } = useAuth();
+  const [metrics, setMetrics] = useState(EMPTY_METRICS);
+  const [sessions, setSessions] = useState([]);
+  const [trend, setTrend] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [timeframe, setTimeframe] = useState('month');
+  const [error, setError] = useState(null);
+  const intervalRef = useRef(null);
+
+  const fetchData = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshing(true);
+    try {
+      const days = timeframe === 'week' ? 7 : timeframe === 'month' ? 30 : 365;
+      const [meRes, trendRes] = await Promise.all([
+        api.get('/api/analytics/me'),
+        api.get(`/api/analytics/trend?days=${days}`),
+      ]);
+      if (meRes.data.success) {
+        setMetrics(meRes.data.metrics || EMPTY_METRICS);
+        setSessions(meRes.data.sessions || []);
+      }
+      if (trendRes.data.success) {
+        setTrend(trendRes.data.trend || []);
+      }
+      setLastUpdated(new Date());
+      setError(null);
+    } catch (err) {
+      console.error('Analytics fetch error:', err);
+      setError('Could not load analytics data. Make sure you are logged in.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [timeframe]);
+
+  // Initial fetch + 30-second polling
+  useEffect(() => {
+    fetchData();
+    intervalRef.current = setInterval(() => fetchData(), 30000);
+    return () => clearInterval(intervalRef.current);
+  }, [fetchData]);
+
+  const handleRefresh = () => fetchData(true);
+
+  // ── Filter sessions by timeframe ─────────────────────────────────────────
+  const filteredSessions = sessions.filter(s => {
+    const daysAgo = timeframe === 'week' ? 7 : timeframe === 'month' ? 30 : Infinity;
+    if (!isFinite(daysAgo)) return true;
+    return new Date(s.createdAt) >= new Date(Date.now() - daysAgo * 86400000);
+  });
+
+  // ── Render ───────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+        <div className="w-14 h-14 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-gray-500 dark:text-gray-400 text-sm">Loading analytics…</p>
+      </div>
+    );
+  }
+
+  const hasData = metrics.gamesPlayed > 0;
+
+  return (
+    <div className="space-y-6 pb-10">
+      {/* ── Section 1: Header ─────────────────────────────────────────────── */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+            Research Analytics Dashboard
+            <span className="flex items-center gap-1.5 text-sm font-normal text-emerald-500">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Live
+            </span>
+          </h1>
+          {lastUpdated && (
+            <p className="mt-1 text-xs text-gray-400 flex items-center gap-1">
+              <Clock className="w-3 h-3" /> Updated {lastUpdated.toLocaleTimeString()}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Time filter */}
+          <div className="flex rounded-xl overflow-hidden border border-gray-200 dark:border-slate-700">
+            {[['week', 'Week'], ['month', 'Month'], ['all', 'All Time']].map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => setTimeframe(val)}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  timeframe === val
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Refresh button */}
+          <button
             onClick={handleRefresh}
-            className={`px-4 py-2 bg-gradient-to-r from-primary-500 to-indigo-500 text-white rounded-xl font-medium transition-all shadow-lg shadow-primary-500/30 flex items-center hover:shadow-xl ${isLoading ? 'opacity-50' : ''}`}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium transition-colors shadow-sm"
           >
-            <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-            {t('analytics.refresh')}
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat, index) => (
-          <div key={index} className="glass-card rounded-xl p-6 hover-lift">
-            <div className="flex items-center justify-between">
-              <div className="p-3 rounded-xl bg-gradient-to-r from-primary-500 to-indigo-500 text-white shadow-lg">
-                <stat.icon className="w-6 h-6" />
-              </div>
-              <span className={`text-sm font-medium flex items-center ${
-                stat.trend === 'up' ? 'text-emerald-500' : 'text-rose-500'
-              }`}>
-                {stat.trend === 'up' ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />}
-                {stat.change}
-              </span>
-            </div>
-            <p className="mt-4 text-3xl font-bold text-gray-900 dark:text-white">{stat.value}</p>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{stat.label}</p>
-          </div>
-        ))}
+      {/* Error banner */}
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-sm">
+          {error}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!hasData && !error && (
+        <div className="text-center py-16 rounded-2xl bg-white dark:bg-slate-800 border border-dashed border-gray-200 dark:border-slate-700">
+          <Activity className="w-12 h-12 mx-auto text-gray-300 dark:text-slate-600 mb-4" />
+          <h3 className="text-lg font-semibold text-gray-600 dark:text-gray-300">No game sessions recorded yet</h3>
+          <p className="text-sm text-gray-400 mt-2">Play a game to see your analytics appear here in real time.</p>
+        </div>
+      )}
+
+      {/* ── Section 2: KPI Cards ──────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KpiCard
+          icon={Brain}
+          label="Cognitive Score"
+          value={fmt(metrics.cognitiveScore)}
+          unit="%"
+          formula="(Correct / Total) × 100"
+          color="blue"
+        />
+        <KpiCard
+          icon={Target}
+          label="Accuracy"
+          value={fmt(metrics.accuracy)}
+          unit="%"
+          formula="(Correct / Scored) × 100"
+          color="green"
+        />
+        <KpiCard
+          icon={AlertCircle}
+          label="Error Rate"
+          value={fmt(metrics.errorRate)}
+          unit="%"
+          formula="(Incorrect / Scored) × 100"
+          color="red"
+        />
+        <KpiCard
+          icon={CheckCircle}
+          label="Completion Rate"
+          value={fmt(metrics.taskCompletionRate)}
+          unit="%"
+          formula="(Completed / Started) × 100"
+          color="purple"
+        />
+        <KpiCard
+          icon={XCircle}
+          label="Missed-Attempt Rate"
+          value={fmt(metrics.missedAttemptRate)}
+          unit="%"
+          formula="(Missed / Total) × 100"
+          color="orange"
+        />
+        <KpiCard
+          icon={Clock}
+          label="Median Response Time"
+          value={fmt(metrics.medianResponseTime, 2)}
+          unit="s"
+          formula="median(responseTimes)"
+          color="cyan"
+        />
+        <KpiCard
+          icon={Activity}
+          label="Games Played"
+          value={metrics.gamesPlayed}
+          formula="Total sessions"
+          color="indigo"
+        />
+        <KpiCard
+          icon={Calendar}
+          label="Engagement"
+          value={`${metrics.engagementDays} / 30`}
+          formula="Active days (last 30)"
+          color="amber"
+        />
       </div>
 
+      {/* ── Section 3: Charts ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="glass-card rounded-2xl p-6">
-          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
-            <TrendingUp className="w-5 h-5 mr-2 text-primary-500" />
-            {t('analytics.cognitiveTrend')}
+        {/* Cognitive Score Trend */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-slate-700">
+          <h3 className="text-base font-semibold text-gray-800 dark:text-white flex items-center gap-2 mb-4">
+            <TrendingUp className="w-4 h-4 text-blue-500" />
+            Cognitive Score &amp; Accuracy Trend
           </h3>
-          <Line data={cognitiveData} options={{
-            responsive: true,
-            plugins: {
-              legend: { position: 'top', labels: { usePointStyle: true, padding: 20 } }
-            },
-            scales: {
-              y: { beginAtZero: true, max: 100, grid: { color: 'rgba(0,0,0,0.05)' } },
-              x: { grid: { display: false } }
-            }
-          }} />
+          {trend.length === 0 ? (
+            <div className="flex items-center justify-center h-48 text-sm text-gray-400">
+              No trend data for this period.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={trend} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" className="dark:stroke-slate-700" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  tickFormatter={d => d.slice(5)}
+                />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                <Tooltip
+                  contentStyle={{ background: '#1e293b', border: 'none', borderRadius: 8, color: '#f1f5f9' }}
+                  formatter={(val) => [`${Number(val).toFixed(1)}%`]}
+                />
+                <Legend iconType="circle" iconSize={8} />
+                <Line type="monotone" dataKey="cognitiveScore" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} name="Cognitive Score" />
+                <Line type="monotone" dataKey="accuracy" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} name="Accuracy" />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
-        <div className="glass-card rounded-2xl p-6">
-          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
-            <Target className="w-5 h-5 mr-2 text-emerald-500" />
-            {t('analytics.gamePerformance')}
+        {/* Game Performance Breakdown */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-slate-700">
+          <h3 className="text-base font-semibold text-gray-800 dark:text-white flex items-center gap-2 mb-4">
+            <Target className="w-4 h-4 text-emerald-500" />
+            Game Performance Breakdown
           </h3>
-          <Bar data={gamePerformanceData} options={{
-            responsive: true,
-            plugins: { legend: { display: false } },
-            scales: {
-              y: { beginAtZero: true, max: 100, grid: { color: 'rgba(0,0,0,0.05)' } },
-              x: { grid: { display: false } }
-            }
-          }} />
+          {(!metrics.byGame || metrics.byGame.length === 0) ? (
+            <div className="flex items-center justify-center h-48 text-sm text-gray-400">
+              No game breakdown data yet.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={metrics.byGame} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" className="dark:stroke-slate-700" />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                <Tooltip
+                  contentStyle={{ background: '#1e293b', border: 'none', borderRadius: 8, color: '#f1f5f9' }}
+                  formatter={(val, name) => name === 'accuracy' ? [`${val}%`, 'Accuracy'] : [val, name]}
+                />
+                <Bar dataKey="accuracy" fill="#6366f1" radius={[4, 4, 0, 0]} name="Accuracy (%)" />
+                <Bar dataKey="sessions" fill="#10b981" radius={[4, 4, 0, 0]} name="Sessions" />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="glass-card rounded-2xl p-6">
-          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
-            <Award className="w-5 h-5 mr-2 text-amber-500" />
-            {t('analytics.riskDistribution')}
+      {/* ── Section 4: Sessions Table ─────────────────────────────────────── */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 dark:border-slate-700">
+          <h3 className="text-base font-semibold text-gray-800 dark:text-white flex items-center gap-2">
+            <Activity className="w-4 h-4 text-indigo-500" />
+            Recent Sessions
+            <span className="ml-auto text-xs font-normal text-gray-400">Last 10 sessions</span>
           </h3>
-          <div className="flex justify-center">
-            <Doughnut data={riskDistributionData} options={{
-              responsive: true,
-              plugins: {
-                legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } }
-              },
-              cutout: '60%'
-            }} />
-          </div>
         </div>
-
-        <div className="col-span-2 glass-card rounded-2xl p-6">
-          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
-            <Zap className="w-5 h-5 mr-2 text-amber-500" />
-            {t('analytics.recentActivity')}
-          </h3>
-          <div className="space-y-3">
-            {recentActivities.map((activity, index) => (
-              <div key={index} className="flex items-center justify-between p-3 bg-white/50 dark:bg-gray-700/30 rounded-xl hover-lift">
-                <div>
-                  <p className="font-medium text-gray-900 dark:text-white">{activity.patient}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">{activity.activity}</p>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <span className="text-sm text-gray-500 dark:text-gray-400">{activity.time}</span>
-                  <span className={`text-sm font-bold px-2 py-1 rounded-lg ${
-                    activity.score.startsWith('+') ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-                  }`}>
-                    {activity.score}
-                  </span>
-                </div>
-              </div>
-            ))}
+        {filteredSessions.length === 0 ? (
+          <div className="p-10 text-center text-sm text-gray-400">No sessions recorded for this period.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-slate-700">
+                  {['Game', 'Stage', 'Score', 'Accuracy', 'Completion', 'Duration', 'Date'].map(h => (
+                    <th key={h} className="px-6 py-3 font-semibold">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
+                {filteredSessions.slice(0, 10).map((s, i) => {
+                  const scored = s.correctAttempts + s.incorrectAttempts;
+                  const acc = scored > 0 ? ((s.correctAttempts / scored) * 100).toFixed(1) : '—';
+                  const comp = s.startedTasks > 0 ? ((s.completedTasks / s.startedTasks) * 100).toFixed(1) : '—';
+                  const dur = s.sessionDuration > 0
+                    ? s.sessionDuration >= 60
+                      ? `${Math.floor(s.sessionDuration / 60)}m ${s.sessionDuration % 60}s`
+                      : `${s.sessionDuration}s`
+                    : '—';
+                  const date = new Date(s.createdAt).toLocaleDateString();
+                  return (
+                    <tr key={s.id || i} className="hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors">
+                      <td className="px-6 py-3 font-medium text-gray-900 dark:text-white capitalize">
+                        {s.gameType === 'gestureRubik' ? 'Gesture Rubik' : s.gameType === 'gestureDraw' ? 'Gesture Draw' : s.gameType}
+                      </td>
+                      <td className="px-6 py-3 text-gray-600 dark:text-gray-300">{s.stage}</td>
+                      <td className="px-6 py-3 text-gray-600 dark:text-gray-300">{s.score}</td>
+                      <td className="px-6 py-3">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                          acc !== '—' && Number(acc) >= 65
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                            : 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+                        }`}>
+                          {acc !== '—' ? `${acc}%` : acc}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3 text-gray-600 dark:text-gray-300">{comp !== '—' ? `${comp}%` : comp}</td>
+                      <td className="px-6 py-3 text-gray-600 dark:text-gray-300">{dur}</td>
+                      <td className="px-6 py-3 text-gray-400 text-xs">{date}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

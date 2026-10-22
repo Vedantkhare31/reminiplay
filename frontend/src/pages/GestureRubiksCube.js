@@ -253,6 +253,22 @@ const GestureRubiksCube = () => {
   const navigate = useNavigate();
   const { user, syncProgress } = useAuth();
 
+  // Session analytics tracking
+  const sessionStartTimeRef = useRef(Date.now());
+
+  // Helper: log session to analytics backend
+  const logSession = async (sessionData) => {
+    try {
+      const token = localStorage.getItem('reminiplay_token');
+      if (!token) return;
+      await fetch('/api/analytics/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': Bearer \ },
+        body: JSON.stringify(sessionData),
+      });
+    } catch (e) { /* silent fail */ }
+  };
+
   // DOM & Canvas Refs
   const mountRef          = useRef(null);
   const webcamRef         = useRef(null);
@@ -773,6 +789,22 @@ const GestureRubiksCube = () => {
         gameStats: { rubiksCubeLevel: newLevel, rubikSolved: newTotal, lastPerformance: rating },
       });
     }
+
+    // Log analytics session
+    logSession({
+      gameType: 'gestureRubik',
+      correctAttempts: newTotal,
+      incorrectAttempts: 0,
+      missedAttempts: 0,
+      totalAttempts: newTotal,
+      startedTasks: 1,
+      completedTasks: 1,
+      responseTimes: [timeSpent],
+      sessionDuration: timeSpent,
+      stage: newLevel,
+      score: pts,
+    });
+    sessionStartTimeRef.current = Date.now();
   }, [coins, level, scrambleDepth, stageStartTime, totalSolved, user, isSoundOn, syncProgress, triggerConfetti, patientStats.avgSolveTime, highlightLayer]);
 
   // ============================================================
