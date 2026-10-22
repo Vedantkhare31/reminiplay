@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Brain, Target, AlertCircle, CheckCircle, XCircle, Clock,
   Activity, Calendar, RefreshCw, TrendingUp, TrendingDown,
-  ArrowUp, ArrowDown
+  ArrowUp, ArrowDown, LogIn
 } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -89,18 +90,24 @@ const Analytics = () => {
         api.get('/api/analytics/me'),
         api.get(`/api/analytics/trend?days=${days}`),
       ]);
-      if (meRes.data.success) {
+      if (meRes.data && meRes.data.success) {
         setMetrics(meRes.data.metrics || EMPTY_METRICS);
         setSessions(meRes.data.sessions || []);
       }
-      if (trendRes.data.success) {
+      if (trendRes.data && trendRes.data.success) {
         setTrend(trendRes.data.trend || []);
       }
       setLastUpdated(new Date());
       setError(null);
     } catch (err) {
-      console.error('Analytics fetch error:', err);
-      setError('Could not load analytics data. Make sure you are logged in.');
+      console.warn('Analytics fetch notice:', err?.response?.data || err?.message);
+      // If 401/403 or network, don't crash the screen — allow the dashboard UI to stay visible
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        setError('unauthorized');
+      } else {
+        // Still keep empty metrics so the full dashboard layout and KPI cards are visible
+        setLastUpdated(new Date());
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -192,12 +199,25 @@ const Analytics = () => {
         </div>
       </div>
 
-      {/* Error banner */}
-      {error && (
+      {/* Guest / Auth reminder banner */}
+      {error === 'unauthorized' ? (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 text-sm gap-3">
+          <div className="flex items-center gap-2">
+            <LogIn className="w-5 h-5 text-blue-500 shrink-0" />
+            <span>You are viewing local session data. Sign in to sync and protect your permanent clinical records.</span>
+          </div>
+          <Link
+            to="/login"
+            className="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs whitespace-nowrap transition-colors shadow-sm"
+          >
+            Sign In
+          </Link>
+        </div>
+      ) : error ? (
         <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-sm">
           {error}
         </div>
-      )}
+      ) : null}
 
       {/* Empty state */}
       {!hasData && !error && (

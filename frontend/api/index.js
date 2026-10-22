@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const authRoutes = require('./routes/authRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 const app = express();
 
@@ -11,6 +12,10 @@ app.use(express.urlencoded({ extended: true }));
 // Auth & User routes
 app.use('/api/auth', authRoutes);
 app.use('/api/user', authRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/analytics', analyticsRoutes);
+app.use('/auth', authRoutes);
+app.use('/user', authRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
